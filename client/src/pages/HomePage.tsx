@@ -176,7 +176,7 @@ export const HomePage = () => {
           </div>
         )}
       </section>
-      <div className="h-full w-full lg:w-[520px] lg:shrink-0 xl:w-[600px] 2xl:w-[680px]">
+      <div className="h-full w-full lg:w-[400px] lg:shrink-0 xl:w-[560px] 2xl:w-[660px]">
         <ChatInterface />
       </div>
     </div>

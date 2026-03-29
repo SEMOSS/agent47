@@ -46,7 +46,15 @@ import {
   startNewRoom,
   type ChatMessage,
 } from "@/store/slices/chatSlice";
-import { BookOpen, Plus, Settings, Trash2 } from "lucide-react";
+import {
+  BookOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  Settings,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -206,6 +214,7 @@ export const ChatInterface = () => {
     | null;
   const selectedMcps = useAppSelector((state) => state.mcp.selectedMcps);
   const { skills, claudeMd } = useAppSelector((state) => state.skills);
+  const [settingsOpen, setSettingsOpen] = useState(true);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [isLoadProjectOpen, setIsLoadProjectOpen] = useState(false);
   const [isConfigurationOpen, setIsConfigurationOpen] = useState(false);
@@ -728,18 +737,39 @@ export const ChatInterface = () => {
       <div className="pointer-events-none absolute -right-24 -top-28 h-64 w-64 rounded-full bg-amber-200/40 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-32 -left-24 h-64 w-64 rounded-full bg-sky-200/35 blur-3xl" />
 
-      <div className="relative grid h-full gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="flex h-full min-h-0 flex-col rounded-xl border border-border/60 bg-white/80 backdrop-blur">
+      <div className={cn(
+        "relative grid h-full gap-6",
+        settingsOpen && "xl:grid-cols-[minmax(0,1fr)_280px]",
+      )}>
+        <section className={cn(
+          "flex h-full min-h-0 flex-col rounded-xl border border-border/60 bg-white/80 backdrop-blur",
+          settingsOpen && "hidden xl:flex",
+        )}>
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                Claude Code Chat
+                Agent Chat
               </p>
               <h1 className="text-lg font-semibold">{activeProjectName}</h1>
             </div>
-            <div className="flex items-center gap-2 rounded-full border border-border/60 bg-white/80 px-3 py-1 text-xs text-muted-foreground">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              Ready for wiring
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 rounded-full border border-border/60 bg-white/80 px-3 py-1 text-xs text-muted-foreground">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                Agent Online
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setSettingsOpen((prev) => !prev)}
+                title={settingsOpen ? "Close settings" : "Open settings"}
+              >
+                {settingsOpen ? (
+                  <PanelRightClose className="h-4 w-4" />
+                ) : (
+                  <PanelRightOpen className="h-4 w-4" />
+                )}
+              </Button>
             </div>
           </header>
 
@@ -780,7 +810,22 @@ export const ChatInterface = () => {
           </footer>
         </section>
 
-        <aside className="flex flex-col gap-5 rounded-xl border border-border/60 bg-white/80 p-4 shadow-sm backdrop-blur">
+        {settingsOpen && (
+        <aside className="flex flex-col gap-5 overflow-y-auto rounded-xl border border-border/60 bg-white/80 p-4 shadow-sm backdrop-blur">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              Settings
+            </p>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => setSettingsOpen(false)}
+              title="Close settings"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
           <div className="space-y-3">
             <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
               Projects
@@ -1430,6 +1475,7 @@ export const ChatInterface = () => {
             </Dialog>
           </div>
         </aside>
+        )}
       </div>
     </div>
   );

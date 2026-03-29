@@ -40,9 +40,7 @@ export const MainNavigation = () => {
                 alt="Semoss Blue Logo"
                 className="h-12"
               />
-              <h1 className="text-xl font-bold whitespace-nowrap">
-                Claude Code Agent
-              </h1>
+              <h1 className="text-xl font-bold whitespace-nowrap">Agent</h1>
             </button>
           ) : (
             <div className="flex items-center space-x-2">
@@ -51,9 +49,7 @@ export const MainNavigation = () => {
                 alt="Semoss Blue Logo"
                 className="h-12"
               />
-              <h1 className="text-xl font-bold whitespace-nowrap">
-                Claude Code Agent
-              </h1>
+              <h1 className="text-xl font-bold whitespace-nowrap">Agent</h1>
             </div>
           )}
 

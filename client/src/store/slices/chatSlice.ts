@@ -1,6 +1,6 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import { v4 as uuidv4 } from "uuid";
-import { createProject } from "./createProjectSlice";
+import { createProject, createReactProject } from "./createProjectSlice";
 import { callClaudeCode } from "../thunks/callClaudeCode";
 
 export type ChatMessage = {
@@ -193,6 +193,11 @@ const chatSlice = createSlice({
       state.pendingMessageId = null;
     });
     builder.addCase(createProject.fulfilled, (state, action) => {
+      state.projectId = action.payload.projectId;
+      state.roomId = createRoomId();
+      state.iframeRefreshKey += 1;
+    });
+    builder.addCase(createReactProject.fulfilled, (state, action) => {
       state.projectId = action.payload.projectId;
       state.roomId = createRoomId();
       state.iframeRefreshKey += 1;
