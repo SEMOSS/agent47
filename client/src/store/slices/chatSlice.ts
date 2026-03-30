@@ -9,7 +9,7 @@ export type ChatMessage = {
   role: "system" | "assistant" | "user";
   time: string;
   content: string;
-  status?: "loading" | "complete" | "error";
+  status?: "loading" | "streaming" | "complete" | "error";
 };
 
 export type PermissionMode =
@@ -100,6 +100,45 @@ const chatSlice = createSlice({
     bumpIframeRefresh(state) {
       state.iframeRefreshKey += 1;
     },
+    updateStreamingContent(
+      state,
+      action: PayloadAction<{ id: string; content: string }>,
+    ) {
+      const message = state.messages.find(
+        (m) => m.id === action.payload.id,
+      );
+      if (message) {
+        message.content = action.payload.content;
+        message.status = "streaming";
+      }
+    },
+    completeStreamingMessage(
+      state,
+      action: PayloadAction<{ id: string; content: string }>,
+    ) {
+      const message = state.messages.find(
+        (m) => m.id === action.payload.id,
+      );
+      if (message) {
+        message.content = action.payload.content;
+        message.status = "complete";
+      }
+      state.pendingMessageId = null;
+    },
+    failStreamingMessage(
+      state,
+      action: PayloadAction<{ id: string; error?: string }>,
+    ) {
+      const message = state.messages.find(
+        (m) => m.id === action.payload.id,
+      );
+      if (message) {
+        message.content =
+          action.payload.error || "Something went wrong. Please try again.";
+        message.status = "error";
+      }
+      state.pendingMessageId = null;
+    },
     addMessage: {
       reducer(
         state,
@@ -146,51 +185,26 @@ const chatSlice = createSlice({
         status: "loading",
       });
     });
-    builder.addCase(callClaudeCode.fulfilled, (state, action) => {
-      const pendingId = state.pendingMessageId;
-      if (pendingId) {
-        const pendingMessage = state.messages.find(
-          (message) => message.id === pendingId,
-        );
-        if (pendingMessage) {
-          pendingMessage.content = action.payload.response;
-          pendingMessage.status = "complete";
-          state.pendingMessageId = null;
-          return;
-        }
+    builder.addCase(callClaudeCode.fulfilled, (state) => {
+      // Streaming already updates the message via completeStreamingMessage.
+      // Only clean up pendingMessageId if it wasn't already cleared.
+      if (state.pendingMessageId) {
+        state.pendingMessageId = null;
       }
-      state.messages.push({
-        id: createMessageId(),
-        author: getAuthorLabel("assistant"),
-        role: "assistant",
-        time: formatMessageTime(new Date()),
-        content: action.payload.response,
-        status: "complete",
-      });
-      state.pendingMessageId = null;
     });
-    builder.addCase(callClaudeCode.rejected, (state, action) => {
-      const pendingId = state.pendingMessageId;
-      if (pendingId) {
+    builder.addCase(callClaudeCode.rejected, (state) => {
+      // Streaming already updates the message via failStreamingMessage.
+      // Only clean up pendingMessageId if it wasn't already cleared.
+      if (state.pendingMessageId) {
         const pendingMessage = state.messages.find(
-          (message) => message.id === pendingId,
+          (message) => message.id === state.pendingMessageId,
         );
-        if (pendingMessage) {
+        if (pendingMessage && pendingMessage.status !== "error") {
           pendingMessage.content = "Something went wrong. Please try again.";
           pendingMessage.status = "error";
-          state.pendingMessageId = null;
-          return;
         }
+        state.pendingMessageId = null;
       }
-      state.messages.push({
-        id: createMessageId(),
-        author: getAuthorLabel("assistant"),
-        role: "assistant",
-        time: formatMessageTime(new Date()),
-        content: "Something went wrong. Please try again.",
-        status: "error",
-      });
-      state.pendingMessageId = null;
     });
     builder.addCase(createProject.fulfilled, (state, action) => {
       state.projectId = action.payload.projectId;
@@ -216,6 +230,9 @@ export const {
   setInputMessage,
   bumpIframeRefresh,
   addMessage,
+  updateStreamingContent,
+  completeStreamingMessage,
+  failStreamingMessage,
 } = chatSlice.actions;
 export { createRoomId };
 export default chatSlice.reducer;

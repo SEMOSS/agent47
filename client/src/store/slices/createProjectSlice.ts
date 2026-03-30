@@ -4,8 +4,30 @@ import {
   type PayloadAction,
 } from "@reduxjs/toolkit";
 import { callClaudeCode } from "../thunks/callClaudeCode";
+import type { StreamingResponse } from "@/contexts/AppContext";
 
 type RunPixelFn = <T = unknown>(pixelString: string) => Promise<T>;
+type RunPixelAsyncFn = (
+  pixelString: string,
+) => Promise<{ jobId: string }>;
+type GetPixelAsyncResultFn = <O extends unknown[] | []>(
+  jobId: string,
+) => Promise<{
+  errors: string[];
+  insightId: string;
+  results: {
+    isMeta: boolean;
+    operationType: string[];
+    output: O[number];
+    pixelExpression: string;
+    pixelId: string;
+    additionalOutput?: unknown;
+    timeToRun: number;
+  }[];
+}>;
+type GetPixelJobStreamingFn = (
+  jobId: string,
+) => Promise<StreamingResponse>;
 
 interface CreateProjectState {
   projectId: string;
@@ -19,10 +41,19 @@ const initialState: CreateProjectState = {
 
 export const createReactProject = createAsyncThunk<
   { projectId: string },
-  { projectName: string; runPixel: RunPixelFn }
+  {
+    projectName: string;
+    runPixel: RunPixelFn;
+    runPixelAsync: RunPixelAsyncFn;
+    getPixelAsyncResult: GetPixelAsyncResultFn;
+    getPixelJobStreaming: GetPixelJobStreamingFn;
+  }
 >(
   "createProject/createReactProject",
-  async ({ projectName, runPixel }, { dispatch }) => {
+  async (
+    { projectName, runPixel },
+    { dispatch },
+  ) => {
     const createProjectPixel = `CreateAppFromTemplate ( project = '${projectName}', projectTemplate ='0f8c31e4-5c48-41e3-8570-1c4fe88a6bfe');`;
 
     try {
@@ -46,10 +77,25 @@ export const createReactProject = createAsyncThunk<
 
 export const createProject = createAsyncThunk<
   { projectId: string },
-  { projectName: string; runPixel: RunPixelFn }
+  {
+    projectName: string;
+    runPixel: RunPixelFn;
+    runPixelAsync: RunPixelAsyncFn;
+    getPixelAsyncResult: GetPixelAsyncResultFn;
+    getPixelJobStreaming: GetPixelJobStreamingFn;
+  }
 >(
   "createProject/createProject",
-  async ({ projectName, runPixel }, { dispatch }) => {
+  async (
+    {
+      projectName,
+      runPixel,
+      runPixelAsync,
+      getPixelAsyncResult,
+      getPixelJobStreaming,
+    },
+    { dispatch },
+  ) => {
     const createProjectPixel = `CreateProject ( project = '${projectName}', portal=['true'], projectType=['CODE'] ) ;`;
     try {
       const response = await runPixel(createProjectPixel);
@@ -71,7 +117,14 @@ export const createProject = createAsyncThunk<
       const claudePrompt =
         "Analyze this project and create a CLAUDE.md file with project context, coding conventions, build instructions, and key architecture notes. Look at the directory structure, key config files, READMEs, and source code to understand the project.";
       void dispatch(
-        callClaudeCode({ message: claudePrompt, runPixel, projectId }),
+        callClaudeCode({
+          message: claudePrompt,
+          runPixel,
+          runPixelAsync,
+          getPixelAsyncResult,
+          getPixelJobStreaming,
+          projectId,
+        }),
       );
       return { projectId };
     } catch (error) {

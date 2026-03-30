@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store";
 import { createReactProject } from "@/store/slices/createProjectSlice";
 import { addSelectedMcp, removeSelectedMcp } from "@/store/slices/mcpSlice";
+import { queryMyProjects } from "@/store/slices/myProjects";
 import {
   callClaudeCode,
   updateRoomOptions,
@@ -157,6 +158,7 @@ const MessageBubble = ({
   const isUser = role === "user";
   const isSystem = role === "system";
   const isLoading = status === "loading";
+  const isStreaming = status === "streaming";
 
   return (
     <div
@@ -181,6 +183,11 @@ const MessageBubble = ({
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-foreground/30 border-t-foreground" />
             <span className="text-sm text-muted-foreground">Thinking...</span>
           </span>
+        ) : isStreaming ? (
+          <div>
+            {content}
+            <span className="inline-block ml-1 h-3 w-0.5 animate-pulse bg-foreground/60" />
+          </div>
         ) : (
           content
         )}
@@ -196,7 +203,8 @@ const MessageBubble = ({
  */
 export const ChatInterface = () => {
   const dispatch = useAppDispatch();
-  const { runPixel } = useAppContext();
+  const { runPixel, runPixelAsync, getPixelAsyncResult, getPixelJobStreaming } =
+    useAppContext();
   const {
     roomId,
     engineId,
@@ -205,6 +213,7 @@ export const ChatInterface = () => {
     permissionMode,
     inputMessage,
     messages,
+    pendingMessageId,
   } = useAppSelector((state) => state.chat);
   const myProjects = useAppSelector(
     (state) => state.myProjects.projects,
@@ -244,7 +253,8 @@ export const ChatInterface = () => {
   const fetchedSkillsProjectIdRef = useRef<string | null>(null);
   const didApplyDefaultMcpSelectionRef = useRef(false);
   const trimmedMessage = inputMessage.trim();
-  const isSendDisabled = trimmedMessage.length === 0;
+  const isStreaming = pendingMessageId !== null;
+  const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
   const trimmedProjectName = newProjectName.trim();
   const isCreateDisabled = trimmedProjectName.length === 0 || isCreatingProject;
   const selectedMcpIds = new Set(selectedMcps.map((mcp) => mcp.project_id));
@@ -263,8 +273,15 @@ export const ChatInterface = () => {
     setIsCreatingProject(true);
     try {
       await dispatch(
-        createReactProject({ projectName: trimmedProjectName, runPixel }),
+        createReactProject({
+          projectName: trimmedProjectName,
+          runPixel,
+          runPixelAsync,
+          getPixelAsyncResult,
+          getPixelJobStreaming,
+        }),
       ).unwrap();
+      dispatch(queryMyProjects({ runPixel }));
       setIsCreateProjectOpen(false);
       setNewProjectName("");
     } catch (error) {
@@ -286,24 +303,26 @@ export const ChatInterface = () => {
     if (!trimmedMessage) {
       return;
     }
-    // dispatch(
-    //   updateRoomOptions({
-    //     roomId,
-    //     instructions: systemPrompt,
-    //     mcps: selectedMcps.map((mcp) => ({
-    //       id: mcp.project_id,
-    //       name: mcp.project_name,
-    //       type: "PROJECT",
-    //     })),
-    //     model: engineId,
-    //     runPixel,
-    //   }),
-    // );
 
     dispatch(addMessage({ role: "user", content: trimmedMessage }));
-    dispatch(callClaudeCode({ message: trimmedMessage, runPixel }));
+    dispatch(
+      callClaudeCode({
+        message: trimmedMessage,
+        runPixel,
+        runPixelAsync,
+        getPixelAsyncResult,
+        getPixelJobStreaming,
+      }),
+    );
     dispatch(setInputMessage(""));
-  }, [dispatch, runPixel, trimmedMessage]);
+  }, [
+    dispatch,
+    runPixel,
+    runPixelAsync,
+    getPixelAsyncResult,
+    getPixelJobStreaming,
+    trimmedMessage,
+  ]);
 
   const resizeChatInput = useCallback(() => {
     const textarea = chatInputRef.current;
@@ -447,13 +466,18 @@ export const ChatInterface = () => {
   useEffect(() => {
     const previousCount = previousMessageCountRef.current;
     const hasNewMessage = messages.length > previousCount;
+    const newestMessage = messages[messages.length - 1];
+
+    // Auto-scroll during streaming content updates
+    if (newestMessage?.status === "streaming") {
+      scrollMessagesToBottom("smooth");
+    }
 
     if (!hasNewMessage) {
       previousMessageCountRef.current = messages.length;
       return;
     }
 
-    const newestMessage = messages[messages.length - 1];
     if (newestMessage?.role === "assistant" || newestMessage?.role === "user") {
       scrollMessagesToBottom(previousCount === 0 ? "auto" : "smooth");
     }

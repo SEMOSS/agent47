@@ -1,4 +1,11 @@
-import { getSystemConfig, runPixel as runPixelSemossSdk } from "@semoss/sdk";
+import {
+	getSystemConfig,
+	runPixel as runPixelSemossSdk,
+	runPixelAsync as runPixelAsyncSemossSdk,
+	getPixelAsyncResult as getPixelAsyncResultSemossSdk,
+	Env,
+	post as sdkPost,
+} from "@semoss/sdk";
 import { useInsight } from "@semoss/sdk/react";
 import {
 	createContext,
@@ -11,6 +18,34 @@ import {
 import { toast } from "sonner";
 import { useLoadingState } from "@/hooks";
 
+/**
+ * Response shape from the pixelJobStreaming endpoint.
+ * Each message has a stream_type ("content", "thinking", or "tool")
+ * and a data payload.
+ */
+export interface StreamingMessage {
+	stream_type: "content" | "thinking" | "tool";
+	data: {
+		content?: string;
+		thinking?: string;
+		finish_reason?: string;
+		[key: string]: unknown;
+	};
+}
+
+export interface StreamingResponse {
+	message: StreamingMessage[];
+	status:
+		| "Created"
+		| "Submitted"
+		| "InProgress"
+		| "Streaming"
+		| "ProgressComplete"
+		| "Complete"
+		| "Error"
+		| "Paused";
+}
+
 export interface AppContextType {
 	runPixel: (<T = unknown>(
 		pixelString: string,
@@ -20,6 +55,23 @@ export interface AppContextType {
 			pixelString: string[],
 			successMessage?: string,
 		) => Promise<T>);
+	runPixelAsync: (pixelString: string) => Promise<{ jobId: string }>;
+	getPixelAsyncResult: <O extends unknown[] | []>(
+		jobId: string,
+	) => Promise<{
+		errors: string[];
+		insightId: string;
+		results: {
+			isMeta: boolean;
+			operationType: string[];
+			output: O[number];
+			pixelExpression: string;
+			pixelId: string;
+			additionalOutput?: unknown;
+			timeToRun: number;
+		}[];
+	}>;
+	getPixelJobStreaming: (jobId: string) => Promise<StreamingResponse>;
 	sendMCPResponseToPlayground: (
 		toolName: string,
 		toolResponse: string,
@@ -121,6 +173,62 @@ export const AppContextProvider = ({ children }: PropsWithChildren) => {
 			}
 		},
 		[insightId],
+	);
+
+	/**
+	 * Run a pixel asynchronously and get a jobId for polling
+	 * @param pixelString - the pixel string to run
+	 */
+	const runPixelAsyncFn = useCallback(
+		async (pixelString: string) => {
+			try {
+				const response = await runPixelAsyncSemossSdk(
+					pixelString,
+					insightId,
+				);
+				return response;
+			} catch (error) {
+				toast.error(`${error.message ?? "Error starting async pixel"}`);
+				throw error;
+			}
+		},
+		[insightId],
+	);
+
+	/**
+	 * Get the final result of an async pixel job
+	 * @param jobId - the job id to get results for
+	 */
+	const getPixelAsyncResultFn = useCallback(
+		async <O extends unknown[] | []>(jobId: string) => {
+			try {
+				const response = await getPixelAsyncResultSemossSdk<O>(jobId);
+				return response;
+			} catch (error) {
+				toast.error(
+					`${error.message ?? "Error getting async pixel result"}`,
+				);
+				throw error;
+			}
+		},
+		[],
+	);
+
+	/**
+	 * Poll for streaming chunks from an async pixel job.
+	 * Hits the /api/engine/pixelJobStreaming endpoint with the jobId.
+	 * @param jobId - the job id to poll streaming content for
+	 */
+	const getPixelJobStreaming = useCallback(
+		async (jobId: string): Promise<StreamingResponse> => {
+			const response = await sdkPost(
+				`${Env.MODULE}/api/engine/pixelJobStreaming`,
+				{ jobId },
+				{},
+			);
+			return response.data as StreamingResponse;
+		},
+		[],
 	);
 
 	/**
@@ -253,6 +361,9 @@ export const AppContextProvider = ({ children }: PropsWithChildren) => {
 		<AppContext.Provider
 			value={{
 				runPixel,
+				runPixelAsync: runPixelAsyncFn,
+				getPixelAsyncResult: getPixelAsyncResultFn,
+				getPixelJobStreaming,
 				sendMCPResponseToPlayground,
 				exampleStateData,
 				isAppDataLoading,

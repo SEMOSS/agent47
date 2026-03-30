@@ -66,22 +66,22 @@ export const HomePage = () => {
   const storedProjectIdRef = useRef<string | null>(null);
   const didCheckStoredProjectRef = useRef(false);
 
-  // let iframeSrc = "";
-  // if (
-  //   import.meta.env.ENDPOINT == "http://localhost:9090" ||
-  //   import.meta.env.ENDPOINT == "http://localhost:8080"
-  // ) {
-  //   iframeSrc = projectId
-  //     ? // ? `${import.meta.env.ENDPOINT}/semoss-ui/packages/client/dist/#/s/${projectId}`
-  //       `${import.meta.env.ENDPOINT}/SemossWeb/packages/client/dist/#/s/${projectId}`
-  //     : "";
-  // } else {
-  //   iframeSrc = projectId
-  //     ? `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`
-  //     : "";
-  // }
+  let iframeSrc = "";
+  if (
+    import.meta.env.ENDPOINT == "http://localhost:9090" ||
+    import.meta.env.ENDPOINT == "http://localhost:8080"
+  ) {
+    iframeSrc = projectId
+      ? // ? `${import.meta.env.ENDPOINT}/semoss-ui/packages/client/dist/#/s/${projectId}`
+        `${import.meta.env.ENDPOINT}/SemossWeb/packages/client/dist/#/s/${projectId}`
+      : "";
+  } else {
+    iframeSrc = projectId
+      ? `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`
+      : "";
+  }
 
-  const iframeSrc = `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`;
+  // const iframeSrc = `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`;
 
   useEffect(() => {
     dispatch(callGetUserMcps({ runPixel }));
