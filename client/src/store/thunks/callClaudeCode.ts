@@ -1,6 +1,7 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import type { ChatState } from "../slices/chatSlice";
 import {
+    addMessage,
     updateStreamingContent,
     completeStreamingMessage,
     failStreamingMessage,
@@ -178,7 +179,7 @@ export const callClaudeCode = createAsyncThunk<
                 permissionMode: chat.permissionMode,
             };
 
-            const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='${safeMessage}', harnessType="claude_code", maxReflections=20, paramValues=[${JSON.stringify(paramMap)}]) ;`;
+            const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='${safeMessage}', harnessType="${chat.harnessType}", maxReflections=20, paramValues=[${JSON.stringify(paramMap)}]) ;`;
 
             console.log(
                 "Calling Claude Code (streaming) with pixelString:",
@@ -213,8 +214,30 @@ export const callClaudeCode = createAsyncThunk<
                                 msg.stream_type === "thinking" &&
                                 msg.data.thinking
                             ) {
-                                // Optionally handle thinking content
-                                // For now, we skip thinking and only show final content
+                                // Show thinking as a system message
+                                dispatch(
+                                    addMessage({
+                                        role: "system",
+                                        content: `_Thinking: ${(msg.data.thinking as string).slice(0, 300)}${(msg.data.thinking as string).length > 300 ? "..." : ""}_`,
+                                    }),
+                                );
+                            } else if (msg.stream_type === "tool") {
+                                // Show tool calls as system step messages
+                                const toolName =
+                                    (msg.data.tool_name as string) ??
+                                    (msg.data.name as string) ??
+                                    (msg.data.function_name as string);
+                                const toolSummary =
+                                    (msg.data.content as string) ??
+                                    (toolName ? `Tool: ${toolName}` : null);
+                                if (toolSummary) {
+                                    dispatch(
+                                        addMessage({
+                                            role: "system",
+                                            content: toolSummary,
+                                        }),
+                                    );
+                                }
                             }
                         }
 

@@ -1,3 +1,8 @@
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -38,8 +43,10 @@ import {
 } from "@/store/slices/skillsSlice";
 import {
   addMessage,
+  type HarnessType,
   type PermissionMode,
   setEngineId,
+  setHarnessType,
   setActiveProject,
   setInputMessage,
   setPermissionMode,
@@ -52,6 +59,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  Search,
   Settings,
   Trash2,
   X,
@@ -140,6 +148,14 @@ const PERMISSION_MODE_OPTIONS: Array<{
   { value: "bypassPermissions", label: "Bypass Permissions" },
 ];
 
+const HARNESS_TYPE_OPTIONS: Array<{
+  value: HarnessType;
+  label: string;
+}> = [
+  { value: "claude_code", label: "Claude Code" },
+  { value: "github_copilot", label: "GitHub Copilot" },
+];
+
 const isPermissionMode = (value: string): value is PermissionMode =>
   PERMISSION_MODE_OPTIONS.some((option) => option.value === value);
 const MAX_CHAT_INPUT_HEIGHT_PX = 240;
@@ -185,11 +201,13 @@ const MessageBubble = ({
           </span>
         ) : isStreaming ? (
           <div>
-            {content}
+            <MarkdownRenderer content={content} />
             <span className="inline-block ml-1 h-3 w-0.5 animate-pulse bg-foreground/60" />
           </div>
+        ) : isSystem ? (
+          <span className="text-xs">{content}</span>
         ) : (
-          content
+          <MarkdownRenderer content={content} />
         )}
       </div>
     </div>
@@ -211,6 +229,7 @@ export const ChatInterface = () => {
     projectId,
     systemPrompt,
     permissionMode,
+    harnessType,
     inputMessage,
     messages,
     pendingMessageId,
@@ -247,6 +266,13 @@ export const ChatInterface = () => {
   const [newSkillContent, setNewSkillContent] = useState("");
   const [isCreatingSkill, setIsCreatingSkill] = useState(false);
   const [createSkillError, setCreateSkillError] = useState<string | null>(null);
+  const [engineDropdownOpen, setEngineDropdownOpen] = useState(false);
+  const [engineSearch, setEngineSearch] = useState("");
+  const [engineResults, setEngineResults] = useState<
+    Array<{ id: string; label: string }>
+  >([]);
+  const [engineLoading, setEngineLoading] = useState(false);
+  const [engineDisplayName, setEngineDisplayName] = useState("");
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const previousMessageCountRef = useRef(0);
@@ -458,6 +484,40 @@ export const ChatInterface = () => {
     setEditingSkillTabId(null);
     setActiveSkillTabId("");
   }, [projectId]);
+
+  const fetchEngines = useCallback(
+    async (search: string) => {
+      setEngineLoading(true);
+      try {
+        const metaFilters = `[[{"tag":"text-generation"}]]`;
+        const pixel = search.trim()
+          ? `MyEngines(filterWord=["<encode>${search.trim()}</encode>"], engineTypes=["MODEL"], metaFilters=[${metaFilters}], limit=[15], offset=[0]);`
+          : `MyEngines(engineTypes=["MODEL"], metaFilters=[${metaFilters}], limit=[15], offset=[0]);`;
+        const engines = await runPixel<
+          Array<{ engine_id: string; engine_display_name: string }>
+        >(pixel);
+        setEngineResults(
+          (engines ?? []).map((e) => ({
+            id: e.engine_id,
+            label: e.engine_display_name,
+          })),
+        );
+      } catch {
+        setEngineResults([]);
+      } finally {
+        setEngineLoading(false);
+      }
+    },
+    [runPixel],
+  );
+
+  useEffect(() => {
+    if (!engineDropdownOpen) return;
+    const timer = setTimeout(() => {
+      void fetchEngines(engineSearch);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [engineSearch, engineDropdownOpen, fetchEngines]);
 
   useEffect(() => {
     resizeChatInput();
@@ -954,6 +1014,9 @@ export const ChatInterface = () => {
                                 <span className="font-medium">
                                   {project.project_name || "Untitled project"}
                                 </span>
+                                <span className="text-xs font-mono text-muted-foreground">
+                                  {nextProjectId}
+                                </span>
                                 <span className="text-xs text-muted-foreground">
                                   {formatProjectDate(
                                     project.project_date_last_edited,
@@ -1019,12 +1082,99 @@ export const ChatInterface = () => {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="engine-id">Engine ID</Label>
-            <Input
-              id="engine-id"
-              value={engineId}
-              onChange={(event) => dispatch(setEngineId(event.target.value))}
-            />
+            <Label>Engine</Label>
+            <Popover
+              open={engineDropdownOpen}
+              onOpenChange={(open) => {
+                setEngineDropdownOpen(open);
+                if (!open) setEngineSearch("");
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="w-full justify-between font-normal"
+                >
+                  <span className="truncate text-left">
+                    {engineDisplayName ||
+                      (engineId
+                        ? `${engineId.slice(0, 18)}...`
+                        : "Select engine")}
+                  </span>
+                  <Search className="ml-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[260px] p-2" align="start">
+                <Input
+                  placeholder="Search models..."
+                  value={engineSearch}
+                  onChange={(e) => setEngineSearch(e.target.value)}
+                  className="mb-2 h-8 text-sm"
+                  autoFocus
+                />
+                {engineLoading ? (
+                  <div className="py-4 text-center text-xs text-muted-foreground">
+                    Loading...
+                  </div>
+                ) : engineResults.length === 0 ? (
+                  <div className="py-4 text-center text-xs text-muted-foreground">
+                    No models found.
+                  </div>
+                ) : (
+                  <div className="max-h-52 overflow-y-auto">
+                    {engineResults.map((engine) => (
+                      <button
+                        key={engine.id}
+                        type="button"
+                        onClick={() => {
+                          dispatch(setEngineId(engine.id));
+                          setEngineDisplayName(engine.label);
+                          setEngineDropdownOpen(false);
+                          setEngineSearch("");
+                        }}
+                        className={cn(
+                          "flex w-full flex-col items-start rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/60",
+                          engineId === engine.id && "bg-accent/80",
+                        )}
+                      >
+                        <span className="font-medium leading-snug">
+                          {engine.label}
+                        </span>
+                        <span className="w-full truncate font-mono text-xs text-muted-foreground">
+                          {engine.id}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </PopoverContent>
+            </Popover>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="harness-type">Harness Type</Label>
+            <Select
+              value={harnessType}
+              onValueChange={(value) => {
+                const option = HARNESS_TYPE_OPTIONS.find(
+                  (o) => o.value === value,
+                );
+                if (option) {
+                  dispatch(setHarnessType(option.value));
+                }
+              }}
+            >
+              <SelectTrigger id="harness-type">
+                <SelectValue placeholder="Select harness type" />
+              </SelectTrigger>
+              <SelectContent>
+                {HARNESS_TYPE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="space-y-2">

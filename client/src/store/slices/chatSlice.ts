@@ -18,12 +18,15 @@ export type PermissionMode =
   | "plan"
   | "bypassPermissions";
 
+export type HarnessType = "claude_code" | "github_copilot";
+
 export interface ChatState {
   roomId: string;
   engineId: string;
   systemPrompt: string;
   projectId: string;
   permissionMode: PermissionMode;
+  harnessType: HarnessType;
   inputMessage: string;
   messages: ChatMessage[];
   pendingMessageId: string | null;
@@ -41,6 +44,7 @@ const initialState: ChatState = {
     "Only read and modify files within the current working directory. Do not traverse or inspect parent directories.",
   projectId: "",
   permissionMode: "acceptEdits",
+  harnessType: "claude_code",
   inputMessage: "",
   messages: [],
   pendingMessageId: null,
@@ -53,10 +57,13 @@ const createMessageId = () =>
 const formatMessageTime = (value: Date) =>
   value.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
-const getAuthorLabel = (role: ChatMessage["role"]) => {
+const getAuthorLabel = (
+  role: ChatMessage["role"],
+  harnessType: HarnessType = "claude_code",
+) => {
   switch (role) {
     case "assistant":
-      return "Claude Code";
+      return harnessType === "github_copilot" ? "GitHub Copilot" : "Claude Code";
     case "system":
       return "System";
     default:
@@ -88,6 +95,9 @@ const chatSlice = createSlice({
     },
     setPermissionMode(state, action: PayloadAction<PermissionMode>) {
       state.permissionMode = action.payload;
+    },
+    setHarnessType(state, action: PayloadAction<HarnessType>) {
+      state.harnessType = action.payload;
     },
     setActiveProject(state, action: PayloadAction<string>) {
       state.projectId = action.payload;
@@ -178,7 +188,7 @@ const chatSlice = createSlice({
       state.pendingMessageId = pendingId;
       state.messages.push({
         id: pendingId,
-        author: getAuthorLabel("assistant"),
+        author: getAuthorLabel("assistant", state.harnessType),
         role: "assistant",
         time: formatMessageTime(new Date()),
         content: "Thinking...",
@@ -226,6 +236,7 @@ export const {
   setSystemPrompt,
   setProjectId,
   setPermissionMode,
+  setHarnessType,
   setActiveProject,
   setInputMessage,
   bumpIframeRefresh,
