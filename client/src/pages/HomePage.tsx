@@ -1,5 +1,6 @@
 import { ChatInterface } from "@/components";
 import { useAppContext } from "@/contexts";
+import { Env } from "@semoss/sdk";
 import { useAppDispatch, useAppSelector } from "@/store";
 import { setActiveProject } from "@/store/slices/chatSlice";
 import { callGetUserMcps } from "@/store/slices/mcpSlice";
@@ -66,22 +67,12 @@ export const HomePage = () => {
   const storedProjectIdRef = useRef<string | null>(null);
   const didCheckStoredProjectRef = useRef(false);
 
+  // Derive base URL at runtime: current page origin + MODULE from injected semoss-env.
   let iframeSrc = "";
-  if (
-    import.meta.env.ENDPOINT == "http://localhost:9090" ||
-    import.meta.env.ENDPOINT == "http://localhost:8080"
-  ) {
-    iframeSrc = projectId
-      ? // ? `${import.meta.env.ENDPOINT}/semoss-ui/packages/client/dist/#/s/${projectId}`
-        `${import.meta.env.ENDPOINT}/SemossWeb/packages/client/dist/#/s/${projectId}`
-      : "";
-  } else {
-    iframeSrc = projectId
-      ? `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`
-      : "";
+  if (projectId) {
+    const runtimeModule = Env.MODULE || import.meta.env.MODULE || "/Monolith";
+    iframeSrc = `${window.location.origin}${runtimeModule}/public_home/${projectId}/portals/`;
   }
-
-  // const iframeSrc = `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`;
 
   useEffect(() => {
     dispatch(callGetUserMcps({ runPixel }));
