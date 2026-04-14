@@ -53,6 +53,7 @@ import {
 	startNewRoom,
 	type ChatMessage,
 } from "@/store/slices/chatSlice";
+import { ConfirmationDialog } from "@/components/library/ConfirmationDialog";
 import { ArrowUp, BookOpen, Plus, Search, Settings, Sparkles, SquarePen, Trash2 } from "lucide-react";
 import {
 	useCallback,
@@ -226,6 +227,8 @@ export const ChatInterface = () => {
 		Array<{ id: string; label: string }>
 	>([]);
 	const [engineLoading, setEngineLoading] = useState(false);
+	const [pendingHarnessType, setPendingHarnessType] =
+		useState<HarnessType | null>(null);
 	const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
 	const messagesContainerRef = useRef<HTMLDivElement | null>(null);
 	const previousMessageCountRef = useRef(0);
@@ -752,6 +755,7 @@ export const ChatInterface = () => {
 	]);
 
 	return (
+		<>
 		<div className="relative h-full min-h-[32rem] overflow-hidden rounded-2xl border border-slate-200/60 dark:border-white/10 bg-gradient-to-br from-slate-50/90 via-white/80 to-sky-50/50 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/80 p-6 shadow-xl shadow-slate-400/10 dark:shadow-black/20 backdrop-blur-xl">
 			<div className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-gradient-to-br from-slate-300/40 to-sky-200/30 dark:from-slate-500/15 dark:to-sky-500/10 blur-3xl animate-pulse-soft" />
 			<div
@@ -855,6 +859,35 @@ export const ChatInterface = () => {
 						</div>
 
 						<div className="space-y-2">
+							<Label>Harness Type</Label>
+							<div className="flex rounded-md border">
+								{HARNESS_TYPE_OPTIONS.map((option) => (
+									<button
+										key={option.value}
+										type="button"
+										onClick={() => {
+											if (option.value === harnessType) return;
+											if (messages.length > 0) {
+												setPendingHarnessType(option.value);
+											} else {
+												dispatch(setHarnessType(option.value));
+											}
+										}}
+										className={cn(
+											"flex-1 px-3 py-1.5 text-sm font-medium transition-colors",
+											"first:rounded-l-md last:rounded-r-md",
+											harnessType === option.value
+												? "bg-primary text-primary-foreground"
+												: "bg-transparent text-muted-foreground hover:bg-accent/60",
+										)}
+									>
+										{option.label}
+									</button>
+								))}
+							</div>
+						</div>
+
+						<div className="space-y-2">
 							<Label>Engine</Label>
 							<Popover
 								open={engineDropdownOpen}
@@ -939,35 +972,6 @@ export const ChatInterface = () => {
 									)}
 								</PopoverContent>
 							</Popover>
-						</div>
-
-						<div className="space-y-2">
-							<Label htmlFor="harness-type">Harness Type</Label>
-							<Select
-								value={harnessType}
-								onValueChange={(value) => {
-									const option = HARNESS_TYPE_OPTIONS.find(
-										(o) => o.value === value,
-									);
-									if (option) {
-										dispatch(setHarnessType(option.value));
-									}
-								}}
-							>
-								<SelectTrigger id="harness-type">
-									<SelectValue placeholder="Select harness type" />
-								</SelectTrigger>
-								<SelectContent>
-									{HARNESS_TYPE_OPTIONS.map((option) => (
-										<SelectItem
-											key={option.value}
-											value={option.value}
-										>
-											{option.label}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
 						</div>
 
 						<div className="space-y-2">
@@ -1649,5 +1653,33 @@ export const ChatInterface = () => {
 				</TabsContent>
 			</Tabs>
 		</div>
+
+		<ConfirmationDialog
+			open={pendingHarnessType !== null}
+			title="Switch Harness Type?"
+			text="Switching the harness type will create a new chat. Your current conversation will be lost. Do you want to continue?"
+			buttons={
+				<>
+					<Button
+						variant="outline"
+						onClick={() => setPendingHarnessType(null)}
+					>
+						Cancel
+					</Button>
+					<Button
+						onClick={() => {
+							if (pendingHarnessType) {
+								dispatch(setHarnessType(pendingHarnessType));
+								dispatch(startNewRoom());
+							}
+							setPendingHarnessType(null);
+						}}
+					>
+						Continue
+					</Button>
+				</>
+			}
+		/>
+		</>
 	);
 };
