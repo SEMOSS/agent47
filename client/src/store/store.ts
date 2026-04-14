@@ -6,13 +6,13 @@ import myProjectsReducer from "./slices/myProjects";
 import skillsReducer from "./slices/skillsSlice";
 
 export const store = configureStore({
-  reducer: {
-    chat: chatReducer,
-    mcp: mcpReducer,
-    createProject: createProjectReducer,
-    myProjects: myProjectsReducer,
-    skills: skillsReducer,
-  },
+	reducer: {
+		chat: chatReducer,
+		mcp: mcpReducer,
+		createProject: createProjectReducer,
+		myProjects: myProjectsReducer,
+		skills: skillsReducer,
+	},
 });
 
 export type RootState = ReturnType<typeof store.getState>;

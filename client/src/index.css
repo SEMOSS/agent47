@@ -44,24 +44,24 @@
 
 :root {
 	--radius: 0.625rem;
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.141 0.005 285.823);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.141 0.005 285.823);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.141 0.005 285.823);
-	--primary: oklch(0.21 0.006 285.885);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.967 0.001 286.375);
-	--secondary-foreground: oklch(0.21 0.006 285.885);
-	--muted: oklch(0.967 0.001 286.375);
-	--muted-foreground: oklch(0.552 0.016 285.938);
-	--accent: oklch(0.967 0.001 286.375);
-	--accent-foreground: oklch(0.21 0.006 285.885);
+	--background: oklch(0.975 0.005 240);
+	--foreground: oklch(0.16 0.01 240);
+	--card: oklch(0.99 0.002 240);
+	--card-foreground: oklch(0.16 0.01 240);
+	--popover: oklch(0.99 0.002 240);
+	--popover-foreground: oklch(0.16 0.01 240);
+	--primary: oklch(0.45 0.1 240);
+	--primary-foreground: oklch(0.99 0 0);
+	--secondary: oklch(0.95 0.008 240);
+	--secondary-foreground: oklch(0.25 0.015 240);
+	--muted: oklch(0.94 0.008 240);
+	--muted-foreground: oklch(0.55 0.015 240);
+	--accent: oklch(0.93 0.012 240);
+	--accent-foreground: oklch(0.25 0.015 240);
 	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.92 0.004 286.32);
-	--input: oklch(0.92 0.004 286.32);
-	--ring: oklch(0.705 0.015 286.067);
+	--border: oklch(0.89 0.012 240);
+	--input: oklch(0.92 0.008 240);
+	--ring: oklch(0.45 0.1 240);
 	--chart-1: oklch(0.646 0.222 41.116);
 	--chart-2: oklch(0.6 0.118 184.704);
 	--chart-3: oklch(0.398 0.07 227.392);
@@ -109,6 +109,35 @@
 	--sidebar-accent-foreground: oklch(0.985 0 0);
 	--sidebar-border: oklch(1 0 0 / 10%);
 	--sidebar-ring: oklch(0.552 0.016 285.938);
+}
+
+@keyframes float {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(-6px);
+	}
+}
+
+@keyframes pulse-soft {
+	0%,
+	100% {
+		opacity: 0.4;
+	}
+	50% {
+		opacity: 0.7;
+	}
+}
+
+@layer utilities {
+	.animate-float {
+		animation: float 3s ease-in-out infinite;
+	}
+	.animate-pulse-soft {
+		animation: pulse-soft 2.5s ease-in-out infinite;
+	}
 }
 
 @layer base {
