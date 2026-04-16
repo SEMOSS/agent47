@@ -26,6 +26,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
+import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
 import { useAppContext } from "@/contexts/AppContext";
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store";
@@ -53,6 +54,7 @@ import {
 	startNewRoom,
 	type ChatMessage,
 } from "@/store/slices/chatSlice";
+import { useTranscriptStream } from "@/hooks/useTranscriptStream";
 import { ConfirmationDialog } from "@/components/library/ConfirmationDialog";
 import { ArrowUp, BookOpen, Plus, Search, Settings, Sparkles, SquarePen, Trash2 } from "lucide-react";
 import {
@@ -199,6 +201,10 @@ export const ChatInterface = () => {
 		| null;
 	const selectedMcps = useAppSelector((state) => state.mcp.selectedMcps);
 	const { skills, claudeMd } = useAppSelector((state) => state.skills);
+	const transcriptEvents = useAppSelector(
+		(state) => state.transcript.events,
+	);
+	const { startWatching, stopWatching } = useTranscriptStream();
 
 	const [isConfigurationOpen, setIsConfigurationOpen] = useState(false);
 	const [isSkillsOpen, setIsSkillsOpen] = useState(false);
@@ -239,6 +245,49 @@ export const ChatInterface = () => {
 	const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
 	const selectedMcpIds = new Set(selectedMcps.map((mcp) => mcp.project_id));
 
+	// Merge chat messages and transcript events into a single chronological
+	// timeline so each user prompt is followed by its own turn's assistant
+	// events (rather than all messages appearing above all transcript events).
+	type TimelineItem =
+		| { source: "message"; createdAt: number; key: string; message: ChatMessage }
+		| {
+			source: "transcript";
+			createdAt: number;
+			key: string;
+			event: (typeof transcriptEvents)[number];
+		};
+
+	const timeline = useMemo<TimelineItem[]>(() => {
+		const items: TimelineItem[] = [];
+		for (const message of messages) {
+			items.push({
+				source: "message",
+				createdAt: message.createdAt ?? 0,
+				key: `msg-${message.id}`,
+				message,
+			});
+		}
+		transcriptEvents.forEach((event, index) => {
+			const parsed = Date.parse(event.timestamp);
+			items.push({
+				source: "transcript",
+				createdAt: Number.isFinite(parsed) ? parsed : 0,
+				key: `transcript-${event.kind}-${index}`,
+				event,
+			});
+		});
+		// Stable sort: if two items share a createdAt, keep insertion order.
+		return items
+			.map((item, index) => ({ item, index }))
+			.sort((a, b) => {
+				if (a.item.createdAt !== b.item.createdAt) {
+					return a.item.createdAt - b.item.createdAt;
+				}
+				return a.index - b.index;
+			})
+			.map(({ item }) => item);
+	}, [messages, transcriptEvents]);
+
 
 
 	const handleSendMessage = useCallback(() => {
@@ -247,6 +296,10 @@ export const ChatInterface = () => {
 		}
 
 		dispatch(addMessage({ role: "user", content: trimmedMessage }));
+
+		// Start watching the room for transcript events before the agent runs
+		startWatching(roomId);
+
 		dispatch(
 			callClaudeCode({
 				message: trimmedMessage,
@@ -255,7 +308,10 @@ export const ChatInterface = () => {
 				getPixelAsyncResult,
 				getPixelJobStreaming,
 			}),
-		);
+		)
+			.finally(() => {
+				stopWatching();
+			});
 		dispatch(setInputMessage(""));
 	}, [
 		dispatch,
@@ -264,6 +320,9 @@ export const ChatInterface = () => {
 		getPixelAsyncResult,
 		getPixelJobStreaming,
 		trimmedMessage,
+		roomId,
+		startWatching,
+		stopWatching,
 	]);
 
 	const resizeChatInput = useCallback(() => {
@@ -800,7 +859,7 @@ export const ChatInterface = () => {
 						ref={messagesContainerRef}
 						className="flex-1 min-h-0 space-y-4 overflow-y-auto px-4 py-5"
 					>
-						{messages.length === 0 ? (
+						{messages.length === 0 && transcriptEvents.length === 0 ? (
 							<div className="flex h-full flex-col items-center justify-center gap-4 text-center">
 								<div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-zinc-800">
 									<Sparkles className="h-8 w-8 text-emerald-500" />
@@ -815,9 +874,27 @@ export const ChatInterface = () => {
 								</div>
 							</div>
 						) : (
-							messages.map((message) => (
-								<MessageBubble key={message.id} {...message} />
-							))
+							<>
+								{timeline.map((item) =>
+									item.source === "message" ? (
+										<MessageBubble
+											key={item.key}
+											{...item.message}
+										/>
+									) : (
+										<TranscriptEventBubble
+											key={item.key}
+											event={item.event}
+										/>
+									),
+								)}
+								{isStreaming ? (
+									<div className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
+										<span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+										<span>Agent is working…</span>
+									</div>
+								) : null}
+							</>
 						)}
 					</div>
 

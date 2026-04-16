@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@semoss/sdk': link:../../../../../../../apache-tomcat-9.0.115/webapps/SemossWeb/libs/sdk
+
 importers:
 
   .:
@@ -90,8 +93,8 @@ importers:
         specifier: ^2.11.2
         version: 2.11.2(react-redux@9.2.0(@types/react@18.3.27)(react@18.3.1)(redux@5.0.1))(react@18.3.1)
       '@semoss/sdk':
-        specifier: ^1.0.0-beta.36
-        version: 1.0.0-beta.36(react@18.3.1)
+        specifier: link:../../../../../../../apache-tomcat-9.0.115/webapps/SemossWeb/libs/sdk
+        version: link:../../../../../../../apache-tomcat-9.0.115/webapps/SemossWeb/libs/sdk
       '@tailwindcss/postcss':
         specifier: ^4.1.18
         version: 4.1.18
@@ -1245,14 +1248,6 @@ packages:
     resolution: {integrity: sha512-mxRFDdHIWRxg3UfIIAwCm6NzvxG0jDX/wBN6KsQFTvKFqqg9vTrWUE68qEjHt19A5wwx5X5aUi2zuZT7YR0jrA==}
     cpu: [x64]
     os: [win32]
-
-  '@semoss/sdk@1.0.0-beta.36':
-    resolution: {integrity: sha512-rPzdVGx2fHyDGRVkh62U5h2K5HxrDxcZ3QfbwOsr/wS5Q0uLtp9x/L78gxDacCiPWB78CRxv5j6u+urTSJvKGg==}
-    peerDependencies:
-      react: 18.3.1
-    peerDependenciesMeta:
-      react:
-        optional: true
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
@@ -2887,10 +2882,6 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.57.1':
     optional: true
-
-  '@semoss/sdk@1.0.0-beta.36(react@18.3.1)':
-    optionalDependencies:
-      react: 18.3.1
 
   '@standard-schema/spec@1.1.0': {}
 

@@ -8,6 +8,8 @@ export type ChatMessage = {
 	author: string;
 	role: "system" | "assistant" | "user";
 	time: string;
+	/** Epoch ms used to interleave messages with transcript events. */
+	createdAt: number;
 	content: string;
 	status?: "loading" | "streaming" | "complete" | "error";
 };
@@ -117,46 +119,6 @@ const chatSlice = createSlice({
 		bumpIframeRefresh(state) {
 			state.iframeRefreshKey += 1;
 		},
-		updateStreamingContent(
-			state,
-			action: PayloadAction<{ id: string; content: string }>,
-		) {
-			const message = state.messages.find(
-				(m) => m.id === action.payload.id,
-			);
-			if (message) {
-				message.content = action.payload.content;
-				message.status = "streaming";
-			}
-		},
-		completeStreamingMessage(
-			state,
-			action: PayloadAction<{ id: string; content: string }>,
-		) {
-			const message = state.messages.find(
-				(m) => m.id === action.payload.id,
-			);
-			if (message) {
-				message.content = action.payload.content;
-				message.status = "complete";
-			}
-			state.pendingMessageId = null;
-		},
-		failStreamingMessage(
-			state,
-			action: PayloadAction<{ id: string; error?: string }>,
-		) {
-			const message = state.messages.find(
-				(m) => m.id === action.payload.id,
-			);
-			if (message) {
-				message.content =
-					action.payload.error ||
-					"Something went wrong. Please try again.";
-				message.status = "error";
-			}
-			state.pendingMessageId = null;
-		},
 		addMessage: {
 			reducer(
 				state,
@@ -165,6 +127,7 @@ const chatSlice = createSlice({
 					author: string;
 					role: ChatMessage["role"];
 					time: string;
+					createdAt: number;
 					content: string;
 				}>,
 			) {
@@ -184,6 +147,7 @@ const chatSlice = createSlice({
 						author: getAuthorLabel(role),
 						role,
 						time: formatMessageTime(now),
+						createdAt: now.getTime(),
 						content,
 					},
 				};
@@ -192,36 +156,26 @@ const chatSlice = createSlice({
 	},
 	extraReducers: (builder) => {
 		builder.addCase(callClaudeCode.pending, (state) => {
-			const pendingId = createMessageId();
-			state.pendingMessageId = pendingId;
-			state.messages.push({
-				id: pendingId,
-				author: getAuthorLabel("assistant", state.harnessType),
-				role: "assistant",
-				time: formatMessageTime(new Date()),
-				content: "Thinking...",
-				status: "loading",
-			});
+			// No placeholder message — the socket transcript stream owns the
+			// assistant UI. We just flag in-flight state via pendingMessageId
+			// so the composer knows to disable sending.
+			state.pendingMessageId = createMessageId();
 		});
 		builder.addCase(callClaudeCode.fulfilled, (state) => {
-			// Streaming already updates the message via completeStreamingMessage.
-			// Only clean up pendingMessageId if it wasn't already cleared.
-			if (state.pendingMessageId) {
-				state.pendingMessageId = null;
-			}
+			state.pendingMessageId = null;
 		});
 		builder.addCase(callClaudeCode.rejected, (state) => {
-			// Streaming already updates the message via failStreamingMessage.
-			// Only clean up pendingMessageId if it wasn't already cleared.
 			if (state.pendingMessageId) {
-				const pendingMessage = state.messages.find(
-					(message) => message.id === state.pendingMessageId,
-				);
-				if (pendingMessage && pendingMessage.status !== "error") {
-					pendingMessage.content =
-						"Something went wrong. Please try again.";
-					pendingMessage.status = "error";
-				}
+				const now = new Date();
+				state.messages.push({
+					id: createMessageId(),
+					author: getAuthorLabel("system"),
+					role: "system",
+					time: formatMessageTime(now),
+					createdAt: now.getTime(),
+					content: "Something went wrong. Please try again.",
+					status: "error",
+				});
 				state.pendingMessageId = null;
 			}
 		});
@@ -251,9 +205,6 @@ export const {
 	setInputMessage,
 	bumpIframeRefresh,
 	addMessage,
-	updateStreamingContent,
-	completeStreamingMessage,
-	failStreamingMessage,
 } = chatSlice.actions;
 export { createRoomId };
 export default chatSlice.reducer;

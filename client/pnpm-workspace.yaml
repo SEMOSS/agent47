@@ -1,0 +1,2 @@
+overrides:
+  '@semoss/sdk': link:../../../../../../../apache-tomcat-9.0.115/webapps/SemossWeb/libs/sdk
