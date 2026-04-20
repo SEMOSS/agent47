@@ -166,7 +166,7 @@ export const HomePage = () => {
   }
 
   //PROD BLOCK
-  //   const iframeSrc = `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`;
+  // const iframeSrc = `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`;
 
   useEffect(() => {
     dispatch(callGetUserMcps({ runPixel }));

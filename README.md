@@ -1,1 +1,1 @@
-# CLAUDE CODE APP
+# Agent47

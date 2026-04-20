@@ -1,7 +1,9 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import type { ChatState } from "../slices/chatSlice";
 import type { MCPState } from "../slices/mcpSlice";
+import { addTranscriptEvent } from "../slices/transcriptSlice";
 import type { StreamingResponse } from "@/contexts/AppContext";
+import { parseTranscriptMessage } from "@/lib/parseTranscriptMessage";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
 type RunPixelAsyncFn = (pixelString: string) => Promise<{ jobId: string }>;
@@ -176,21 +178,22 @@ export const callClaudeCode = createAsyncThunk<
         throw new Error("No job ID returned from pixel execution");
       }
 
-      // 4. Poll for the job to finish. We still drain `response.message` every
-      //    tick (otherwise the pixel job doesn't always reach a terminal state),
-      //    but we no longer dispatch the chunks into the chat — the socket
-      //    transcript stream is now the source of truth for what gets rendered.
+      // 4. Poll for the job to finish. Each tick returns any new streaming
+      //    chunks in `response.message`; we parse them into TranscriptEvents
+      //    (same shape the websocket emits) and dispatch into the transcript
+      //    slice so the UI renders them.
       let isPolling = true;
 
       while (isPolling) {
         try {
           const response = await getPixelJobStreaming(jobId);
 
-          // Drain messages, intentionally no-op on the chat store.
           if (response && response.message.length > 0) {
-            for (const _msg of response.message) {
-              // no-op: socket stream paints the final content
-              void _msg;
+            for (const streamMsg of response.message) {
+              const events = parseTranscriptMessage(streamMsg);
+              for (const event of events) {
+                dispatch(addTranscriptEvent(event));
+              }
             }
           }
 

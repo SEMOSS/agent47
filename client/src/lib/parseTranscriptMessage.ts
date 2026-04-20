@@ -22,7 +22,38 @@ const inferKind = (
 };
 
 /**
- * Unwraps the raw websocket message envelope, returning the inner payload.
+ * Returns true if `msg` already looks like a recognizable transcript event
+ * (or an "assistant" aggregate with texts/toolInvocations). Used to know when
+ * to stop peeling envelope layers.
+ */
+const looksLikeEvent = (msg: Record<string, unknown>): boolean => {
+    if ("toolName" in msg) return true;
+    if ("durationMs" in msg) return true;
+    if ("promptId" in msg) return true;
+    if ("text" in msg && typeof msg.text === "string") return true;
+    if (Array.isArray(msg.texts) && (msg.texts as unknown[]).length > 0) {
+        return true;
+    }
+    if (
+        Array.isArray(msg.toolInvocations) &&
+        (msg.toolInvocations as unknown[]).length > 0
+    ) {
+        return true;
+    }
+    return false;
+};
+
+/**
+ * Unwraps the raw message envelope, returning the inner payload.
+ *
+ * The websocket wraps events in a single `data` layer:
+ *   { type: "claude_code", data: { toolName: "Read", ... } }
+ *
+ * The async pixel streamer wraps them in two layers:
+ *   { stream_type, data: { event, uuid, sessionId, data: { model, toolInvocations } } }
+ *
+ * We peel `data` / `payload` layers until we reach something that looks like
+ * an actual event.
  */
 const unwrapEnvelope = (raw: unknown): Record<string, unknown> | null => {
     if (raw == null || typeof raw !== "object") {
@@ -31,16 +62,28 @@ const unwrapEnvelope = (raw: unknown): Record<string, unknown> | null => {
 
     let msg = raw as Record<string, unknown>;
 
-    // If the backend or streamer wraps the event in an envelope, unwrap it.
-    // e.g. { type: "claude_code", data: { toolName: "Read", ... } }
-    if (msg.data && typeof msg.data === "object" && !Array.isArray(msg.data)) {
-        msg = msg.data as Record<string, unknown>;
-    } else if (
-        msg.payload &&
-        typeof msg.payload === "object" &&
-        !Array.isArray(msg.payload)
-    ) {
-        msg = msg.payload as Record<string, unknown>;
+    for (let depth = 0; depth < 4; depth += 1) {
+        if (looksLikeEvent(msg)) break;
+
+        if (
+            msg.data &&
+            typeof msg.data === "object" &&
+            !Array.isArray(msg.data)
+        ) {
+            msg = msg.data as Record<string, unknown>;
+            continue;
+        }
+
+        if (
+            msg.payload &&
+            typeof msg.payload === "object" &&
+            !Array.isArray(msg.payload)
+        ) {
+            msg = msg.payload as Record<string, unknown>;
+            continue;
+        }
+
+        break;
     }
 
     return msg;

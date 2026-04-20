@@ -54,7 +54,7 @@ import {
 	startNewRoom,
 	type ChatMessage,
 } from "@/store/slices/chatSlice";
-import { useTranscriptStream } from "@/hooks/useTranscriptStream";
+// import { useTranscriptStream } from "@/hooks/useTranscriptStream";
 import { ConfirmationDialog } from "@/components/library/ConfirmationDialog";
 import { ArrowUp, BookOpen, Plus, Search, Settings, Sparkles, SquarePen, Trash2 } from "lucide-react";
 import {
@@ -204,7 +204,12 @@ export const ChatInterface = () => {
 	const transcriptEvents = useAppSelector(
 		(state) => state.transcript.events,
 	);
-	const { startWatching, stopWatching } = useTranscriptStream();
+	// Transcript events are now sourced from the async streaming poll in
+	// callClaudeCode. The websocket-based useTranscriptStream hook is left
+	// in place in the codebase for reference, but intentionally NOT invoked
+	// here so that mounting ChatInterface does not open a ws connection.
+	// Re-enable by uncommenting the line below.
+	// const { startWatching, stopWatching } = useTranscriptStream();
 
 	const [isConfigurationOpen, setIsConfigurationOpen] = useState(false);
 	const [isSkillsOpen, setIsSkillsOpen] = useState(false);
@@ -297,8 +302,9 @@ export const ChatInterface = () => {
 
 		dispatch(addMessage({ role: "user", content: trimmedMessage }));
 
-		// Start watching the room for transcript events before the agent runs
-		startWatching(roomId);
+		// Websocket watch lifecycle kept here for reference; painting now
+		// comes from the async stream inside callClaudeCode.
+		// startWatching(roomId);
 
 		dispatch(
 			callClaudeCode({
@@ -308,10 +314,10 @@ export const ChatInterface = () => {
 				getPixelAsyncResult,
 				getPixelJobStreaming,
 			}),
-		)
-			.finally(() => {
-				stopWatching();
-			});
+		);
+		// .finally(() => {
+		// 	stopWatching();
+		// });
 		dispatch(setInputMessage(""));
 	}, [
 		dispatch,
@@ -320,9 +326,6 @@ export const ChatInterface = () => {
 		getPixelAsyncResult,
 		getPixelJobStreaming,
 		trimmedMessage,
-		roomId,
-		startWatching,
-		stopWatching,
 	]);
 
 	const resizeChatInput = useCallback(() => {
