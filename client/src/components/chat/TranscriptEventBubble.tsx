@@ -129,13 +129,19 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
                     <span className="font-medium text-foreground/80">
                         Tool Result
                     </span>
-                    <span className="text-muted-foreground/60">{"\u00b7"}</span>
+                    {(hasContent || event.durationMs > 0) && (
+                        <span className="text-muted-foreground/60">
+                            {"\u00b7"}
+                        </span>
+                    )}
                     <StatusIcon
                         className={`h-3 w-3 shrink-0 ${statusColor} ${hasContent ? "" : "hidden"}`}
                     />
-                    <span className="text-muted-foreground">
-                        {formatDuration(event.durationMs)}
-                    </span>
+                    {event.durationMs > 0 && (
+                        <span className="text-muted-foreground">
+                            {formatDuration(event.durationMs)}
+                        </span>
+                    )}
                     {event.filePath && (
                         <>
                             <span className="text-muted-foreground/60">

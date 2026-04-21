@@ -1,8 +1,28 @@
 import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/components/ui/popover";
+	ArrowUp,
+	BookOpen,
+	Plus,
+	Search,
+	Settings,
+	Sparkles,
+	SquarePen,
+	Trash2,
+} from "lucide-react";
+import {
+	type ChangeEvent,
+	type FormEvent,
+	type KeyboardEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import { toast } from "sonner";
+import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
+import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
+// import { useTranscriptStream } from "@/hooks/useTranscriptStream";
+import { ConfirmationDialog } from "@/components/library/ConfirmationDialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -17,56 +37,50 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
+import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
-import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
+import { Textarea } from "@/components/ui/textarea";
 import { useAppContext } from "@/contexts/AppContext";
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store";
-import { addSelectedMcp, removeSelectedMcp } from "@/store/slices/mcpSlice";
-import {
-	callClaudeCode,
-	updateRoomOptions,
-} from "@/store/thunks/callClaudeCode";
-import {
-	querySkills,
-	updateSkill,
-	deleteSkill,
-	createSkill,
-} from "@/store/slices/skillsSlice";
 import {
 	addMessage,
+	type ChatMessage,
 	type HarnessType,
 	type PermissionMode,
-	setEngineId,
 	setEngineDisplayName,
+	setEngineId,
 	setHarnessType,
 	setInputMessage,
 	setPermissionMode,
 	setSystemPrompt,
 	startNewRoom,
-	type ChatMessage,
 } from "@/store/slices/chatSlice";
-// import { useTranscriptStream } from "@/hooks/useTranscriptStream";
-import { ConfirmationDialog } from "@/components/library/ConfirmationDialog";
-import { ArrowUp, BookOpen, Plus, Search, Settings, Sparkles, SquarePen, Trash2 } from "lucide-react";
 import {
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-	type ChangeEvent,
-	type FormEvent,
-	type KeyboardEvent,
-} from "react";
+	addSelectedMcp,
+	callGetUserMcps,
+	removeSelectedMcp,
+} from "@/store/slices/mcpSlice";
+import {
+	createSkill,
+	deleteSkill,
+	querySkills,
+	updateSkill,
+} from "@/store/slices/skillsSlice";
+import {
+	callClaudeCode,
+	updateRoomOptions,
+} from "@/store/thunks/callClaudeCode";
 
 type McpProject = {
 	project_name?: string;
@@ -115,6 +129,7 @@ const MAX_CHAT_INPUT_HEIGHT_PX = 240;
 const DEFAULT_SELECTED_MCP_IDS = new Set([
 	"4b4e1df8-cff6-4345-863b-5631a0e51000",
 	"67aa0dcf-04f5-460f-9075-bad8eeedad7e",
+	"394404bf-02e5-44b2-bc7c-e93d9b698f58",
 ]);
 
 const MessageBubble = ({
@@ -201,9 +216,7 @@ export const ChatInterface = () => {
 		| null;
 	const selectedMcps = useAppSelector((state) => state.mcp.selectedMcps);
 	const { skills, claudeMd } = useAppSelector((state) => state.skills);
-	const transcriptEvents = useAppSelector(
-		(state) => state.transcript.events,
-	);
+	const transcriptEvents = useAppSelector((state) => state.transcript.events);
 	// Transcript events are now sourced from the async streaming poll in
 	// callClaudeCode. The websocket-based useTranscriptStream hook is left
 	// in place in the codebase for reference, but intentionally NOT invoked
@@ -212,6 +225,8 @@ export const ChatInterface = () => {
 	// const { startWatching, stopWatching } = useTranscriptStream();
 
 	const [isConfigurationOpen, setIsConfigurationOpen] = useState(false);
+	const [isMcpOpen, setIsMcpOpen] = useState(false);
+	const [mcpSearch, setMcpSearch] = useState("");
 	const [isSkillsOpen, setIsSkillsOpen] = useState(false);
 	const [isLoadingSkills, setIsLoadingSkills] = useState(false);
 	const [skillsError, setSkillsError] = useState<string | null>(null);
@@ -243,6 +258,8 @@ export const ChatInterface = () => {
 	const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
 	const messagesContainerRef = useRef<HTMLDivElement | null>(null);
 	const previousMessageCountRef = useRef(0);
+	const isPinnedToBottomRef = useRef(true);
+	const wasStreamingRef = useRef(false);
 	const fetchedSkillsProjectIdRef = useRef<string | null>(null);
 	const didApplyDefaultMcpSelectionRef = useRef(false);
 	const trimmedMessage = inputMessage.trim();
@@ -254,13 +271,18 @@ export const ChatInterface = () => {
 	// timeline so each user prompt is followed by its own turn's assistant
 	// events (rather than all messages appearing above all transcript events).
 	type TimelineItem =
-		| { source: "message"; createdAt: number; key: string; message: ChatMessage }
 		| {
-			source: "transcript";
-			createdAt: number;
-			key: string;
-			event: (typeof transcriptEvents)[number];
-		};
+				source: "message";
+				createdAt: number;
+				key: string;
+				message: ChatMessage;
+		  }
+		| {
+				source: "transcript";
+				createdAt: number;
+				key: string;
+				event: (typeof transcriptEvents)[number];
+		  };
 
 	const timeline = useMemo<TimelineItem[]>(() => {
 		const items: TimelineItem[] = [];
@@ -292,8 +314,6 @@ export const ChatInterface = () => {
 			})
 			.map(({ item }) => item);
 	}, [messages, transcriptEvents]);
-
-
 
 	const handleSendMessage = useCallback(() => {
 		if (!trimmedMessage) {
@@ -346,20 +366,28 @@ export const ChatInterface = () => {
 				: "hidden";
 	}, []);
 
-	const scrollMessagesToBottom = useCallback(
-		(behavior: ScrollBehavior = "smooth") => {
-			const messagesContainer = messagesContainerRef.current;
-			if (!messagesContainer) {
-				return;
-			}
-
-			messagesContainer.scrollTo({
-				top: messagesContainer.scrollHeight,
-				behavior,
-			});
-		},
-		[],
-	);
+	// Track whether the user is pinned near the bottom. Only user-initiated
+	// scrolls (wheel/touch) flip this — programmatic scrollTo calls don't,
+	// so smooth auto-scroll animations aren't mistaken for scroll-away.
+	useEffect(() => {
+		const container = messagesContainerRef.current;
+		if (!container) return;
+		const updatePinState = () => {
+			const distanceFromBottom =
+				container.scrollHeight -
+				container.scrollTop -
+				container.clientHeight;
+			isPinnedToBottomRef.current = distanceFromBottom < 80;
+		};
+		container.addEventListener("wheel", updatePinState, { passive: true });
+		container.addEventListener("touchmove", updatePinState, {
+			passive: true,
+		});
+		return () => {
+			container.removeEventListener("wheel", updatePinState);
+			container.removeEventListener("touchmove", updatePinState);
+		};
+	}, []);
 
 	const handleMessageChange = useCallback(
 		(event: ChangeEvent<HTMLTextAreaElement>) => {
@@ -380,7 +408,6 @@ export const ChatInterface = () => {
 		},
 		[handleSendMessage],
 	);
-
 
 	const handleToggleMcp = useCallback(
 		(mcp: McpProject, nextChecked: boolean) => {
@@ -492,6 +519,14 @@ export const ChatInterface = () => {
 	}, [engineSearch, engineDropdownOpen, fetchEngines]);
 
 	useEffect(() => {
+		if (!isMcpOpen) return;
+		const timer = setTimeout(() => {
+			void dispatch(callGetUserMcps({ runPixel, filterWord: mcpSearch }));
+		}, 300);
+		return () => clearTimeout(timer);
+	}, [mcpSearch, isMcpOpen, dispatch, runPixel]);
+
+	useEffect(() => {
 		if (!engineId || engineDisplayName) return;
 		let cancelled = false;
 		(async () => {
@@ -520,29 +555,38 @@ export const ChatInterface = () => {
 	}, [inputMessage, resizeChatInput]);
 
 	useEffect(() => {
+		const container = messagesContainerRef.current;
+		if (!container) return;
+
 		const previousCount = previousMessageCountRef.current;
-		const hasNewMessage = messages.length > previousCount;
-		const newestMessage = messages[messages.length - 1];
-
-		// Auto-scroll during streaming content updates
-		if (newestMessage?.status === "streaming") {
-			scrollMessagesToBottom("smooth");
-		}
-
-		if (!hasNewMessage) {
-			previousMessageCountRef.current = messages.length;
-			return;
-		}
-
-		if (
-			newestMessage?.role === "assistant" ||
-			newestMessage?.role === "user"
-		) {
-			scrollMessagesToBottom(previousCount === 0 ? "auto" : "smooth");
-		}
-
+		const hasNewUserMessage =
+			messages.length > previousCount &&
+			messages[messages.length - 1]?.role === "user";
 		previousMessageCountRef.current = messages.length;
-	}, [messages, scrollMessagesToBottom]);
+
+		// A freshly-sent user message always re-pins to the bottom.
+		if (hasNewUserMessage) {
+			isPinnedToBottomRef.current = true;
+		}
+
+		if (!isPinnedToBottomRef.current) return;
+
+		container.scrollTo({
+			top: container.scrollHeight,
+			behavior: previousCount === 0 ? "auto" : "smooth",
+		});
+	}, [messages, transcriptEvents, isStreaming]);
+
+	useEffect(() => {
+		const justFinished = wasStreamingRef.current && !isStreaming;
+		wasStreamingRef.current = isStreaming;
+		if (!justFinished) return;
+
+		const lastMessage = messages[messages.length - 1];
+		if (lastMessage?.status === "error") return;
+
+		toast.success("Response complete", { duration: 2000 });
+	}, [isStreaming, messages]);
 
 	const normalizedMcps = Array.isArray(availableMcps) ? availableMcps : [];
 	const skillTabs = useMemo<SkillTab[]>(() => {
@@ -818,327 +862,402 @@ export const ChatInterface = () => {
 
 	return (
 		<>
-		<div className="relative h-full min-h-[32rem] overflow-hidden rounded-2xl border border-slate-200/60 dark:border-white/10 bg-gradient-to-br from-slate-50/90 via-white/80 to-sky-50/50 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/80 p-6 shadow-xl shadow-slate-400/10 dark:shadow-black/20 backdrop-blur-xl">
-			<div className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-gradient-to-br from-slate-300/40 to-sky-200/30 dark:from-slate-500/15 dark:to-sky-500/10 blur-3xl animate-pulse-soft" />
-			<div
-				className="pointer-events-none absolute -bottom-32 -left-24 h-72 w-72 rounded-full bg-gradient-to-tr from-sky-200/35 to-slate-200/25 dark:from-sky-500/10 dark:to-slate-500/8 blur-3xl animate-pulse-soft"
-				style={{ animationDelay: "1.25s" }}
-			/>
+			<div className="relative h-full min-h-[32rem] overflow-hidden rounded-2xl border border-slate-200/60 dark:border-white/10 bg-gradient-to-br from-slate-50/90 via-white/80 to-sky-50/50 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/80 p-6 shadow-xl shadow-slate-400/10 dark:shadow-black/20 backdrop-blur-xl">
+				<div className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-gradient-to-br from-slate-300/40 to-sky-200/30 dark:from-slate-500/15 dark:to-sky-500/10 blur-3xl animate-pulse-soft" />
+				<div
+					className="pointer-events-none absolute -bottom-32 -left-24 h-72 w-72 rounded-full bg-gradient-to-tr from-sky-200/35 to-slate-200/25 dark:from-sky-500/10 dark:to-slate-500/8 blur-3xl animate-pulse-soft"
+					style={{ animationDelay: "1.25s" }}
+				/>
 
-			<Tabs defaultValue="chat" className="relative flex h-full flex-col">
-				<header className="flex flex-col gap-2 rounded-t-xl border border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-slate-50/60 via-white/40 to-sky-50/30 px-4 py-3">
-					<div className="flex flex-col items-center text-center">
-						<p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
-							Agent Chat
-						</p>
-					</div>
-					<div className="flex items-center justify-between">
-						<div className="flex items-center gap-2">
-							<div className="flex items-center gap-2 rounded-full border border-emerald-200/60 bg-emerald-50/80 dark:bg-emerald-900/30 dark:border-emerald-700/40 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
-								<span className="h-2 w-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
-								Agent Online
-							</div>
-							<TabsList>
-								<TabsTrigger value="chat">Chat</TabsTrigger>
-								<TabsTrigger value="settings">Settings</TabsTrigger>
-							</TabsList>
-						</div>
-						<Button
-							variant="ghost"
-							size="icon"
-							onClick={() => dispatch(startNewRoom())}
-							title="New Chat"
-						>
-							<SquarePen className="h-4 w-4" />
-						</Button>
-					</div>
-				</header>
-
-				<TabsContent
-					value="chat"
-					className="mt-0 flex flex-1 min-h-0 flex-col rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-white/80 dark:bg-zinc-900/60 backdrop-blur-xl shadow-lg shadow-slate-400/5"
+				<Tabs
+					defaultValue="chat"
+					className="relative flex h-full flex-col"
 				>
-					<div
-						ref={messagesContainerRef}
-						className="flex-1 min-h-0 space-y-4 overflow-y-auto px-4 py-5"
-					>
-						{messages.length === 0 && transcriptEvents.length === 0 ? (
-							<div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-								<div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-zinc-800">
-									<Sparkles className="h-8 w-8 text-emerald-500" />
+					<header className="flex flex-col gap-2 rounded-t-xl border border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-slate-50/60 via-white/40 to-sky-50/30 px-4 py-3">
+						<div className="flex flex-col items-center text-center">
+							<p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
+								Agent Chat
+							</p>
+						</div>
+						<div className="flex items-center justify-between">
+							<div className="flex items-center gap-2">
+								<div className="flex items-center gap-2 rounded-full border border-emerald-200/60 bg-emerald-50/80 dark:bg-emerald-900/30 dark:border-emerald-700/40 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+									<span className="h-2 w-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
+									Agent Online
 								</div>
-								<div className="space-y-1">
-									<h3 className="text-lg font-semibold tracking-tight">
-										Start a conversation
-									</h3>
-									<p className="text-sm text-muted-foreground">
-										Describe what you want to build and the AI agent will help you create it.
-									</p>
-								</div>
+								<TabsList>
+									<TabsTrigger value="chat">Chat</TabsTrigger>
+									<TabsTrigger value="settings">
+										Settings
+									</TabsTrigger>
+								</TabsList>
 							</div>
-						) : (
-							<>
-								{timeline.map((item) =>
-									item.source === "message" ? (
-										<MessageBubble
-											key={item.key}
-											{...item.message}
-										/>
-									) : (
-										<TranscriptEventBubble
-											key={item.key}
-											event={item.event}
-										/>
-									),
-								)}
-								{isStreaming ? (
-									<div className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
-										<span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-										<span>Agent is working…</span>
-									</div>
-								) : null}
-							</>
-						)}
-					</div>
-
-					<footer className="border-t border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-white/60 to-slate-50/40 px-4 py-4">
-						<div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-							<Textarea
-								placeholder="Type a message…"
-								rows={2}
-								ref={chatInputRef}
-								value={inputMessage}
-								onChange={handleMessageChange}
-								onKeyDown={handleMessageKeyDown}
-								className="min-h-[3.25rem] max-h-60 flex-1 resize-none border-slate-200/60 bg-white/90 dark:bg-zinc-800/70 focus-visible:ring-slate-400/30"
-							/>
 							<Button
-								disabled={isSendDisabled}
-								onClick={handleSendMessage}
+								variant="ghost"
 								size="icon"
-								className="h-9 w-9 shrink-0 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20 transition-all duration-200 hover:shadow-lg hover:shadow-emerald-500/30 disabled:bg-slate-300 disabled:shadow-none dark:disabled:bg-zinc-700"
+								onClick={() => dispatch(startNewRoom())}
+								title="New Chat"
 							>
-								<ArrowUp className="h-4 w-4" />
+								<SquarePen className="h-4 w-4" />
 							</Button>
 						</div>
-					</footer>
-				</TabsContent>
+					</header>
 
-				<TabsContent
-					value="settings"
-					className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 p-4 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
-				>
-					<div className="flex flex-col gap-5">
-						<div className="space-y-2">
-							<p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
-								Session
-							</p>
-							<h2 className="text-lg font-semibold">
-								Room Settings
-							</h2>
-						</div>
-
-						<div className="space-y-2">
-							<Label>Harness Type</Label>
-							<div className="flex rounded-md border">
-								{HARNESS_TYPE_OPTIONS.map((option) => (
-									<button
-										key={option.value}
-										type="button"
-										onClick={() => {
-											if (option.value === harnessType) return;
-											if (messages.length > 0) {
-												setPendingHarnessType(option.value);
-											} else {
-												dispatch(setHarnessType(option.value));
-											}
-										}}
-										className={cn(
-											"flex-1 px-3 py-1.5 text-sm font-medium transition-colors",
-											"first:rounded-l-md last:rounded-r-md",
-											harnessType === option.value
-												? "bg-primary text-primary-foreground"
-												: "bg-transparent text-muted-foreground hover:bg-accent/60",
-										)}
-									>
-										{option.label}
-									</button>
-								))}
-							</div>
-						</div>
-
-						<div className="space-y-2">
-							<Label>Engine</Label>
-							<Popover
-								open={engineDropdownOpen}
-								onOpenChange={(open) => {
-									setEngineDropdownOpen(open);
-									if (!open) setEngineSearch("");
-								}}
-							>
-								<PopoverTrigger asChild>
-									<Button
-										variant="outline"
-										className="w-full justify-between font-normal"
-									>
-										<span className="truncate text-left">
-											{engineDisplayName ||
-												(engineId
-													? `${engineId.slice(0, 18)}...`
-													: "Select engine")}
-										</span>
-										<Search className="ml-2 h-4 w-4 shrink-0 text-muted-foreground" />
-									</Button>
-								</PopoverTrigger>
-								<PopoverContent
-									className="w-[260px] p-2"
-									align="start"
-								>
-									<Input
-										placeholder="Search models..."
-										value={engineSearch}
-										onChange={(e) =>
-											setEngineSearch(e.target.value)
-										}
-										className="mb-2 h-8 text-sm"
-										autoFocus
-									/>
-									{engineLoading ? (
-										<div className="py-4 text-center text-xs text-muted-foreground">
-											Loading...
-										</div>
-									) : engineResults.length === 0 ? (
-										<div className="py-4 text-center text-xs text-muted-foreground">
-											No models found.
-										</div>
-									) : (
-										<div className="max-h-52 overflow-y-auto">
-											{engineResults.map((engine) => (
-												<button
-													key={engine.id}
-													type="button"
-													onClick={() => {
-														dispatch(
-															setEngineId(
-																engine.id,
-															),
-														);
-														dispatch(
-															setEngineDisplayName(
-																engine.label,
-															),
-														);
-														setEngineDropdownOpen(
-															false,
-														);
-														setEngineSearch("");
-													}}
-													className={cn(
-														"flex w-full flex-col items-start rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/60",
-														engineId ===
-															engine.id &&
-															"bg-accent/80",
-													)}
-												>
-													<span className="font-medium leading-snug">
-														{engine.label}
-													</span>
-													<span className="w-full truncate font-mono text-xs text-muted-foreground">
-														{engine.id}
-													</span>
-												</button>
-											))}
-										</div>
+					<TabsContent
+						value="chat"
+						className="mt-0 flex flex-1 min-h-0 flex-col rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-white/80 dark:bg-zinc-900/60 backdrop-blur-xl shadow-lg shadow-slate-400/5"
+					>
+						<div
+							ref={messagesContainerRef}
+							className="flex-1 min-h-0 space-y-4 overflow-y-auto px-4 py-5"
+						>
+							{messages.length === 0 &&
+							transcriptEvents.length === 0 ? (
+								<div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+									<div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-zinc-800">
+										<Sparkles className="h-8 w-8 text-emerald-500" />
+									</div>
+									<div className="space-y-1">
+										<h3 className="text-lg font-semibold tracking-tight">
+											Start a conversation
+										</h3>
+										<p className="text-sm text-muted-foreground">
+											Describe what you want to build and
+											the AI agent will help you create
+											it.
+										</p>
+									</div>
+								</div>
+							) : (
+								<>
+									{timeline.map((item) =>
+										item.source === "message" ? (
+											<MessageBubble
+												key={item.key}
+												{...item.message}
+											/>
+										) : (
+											<TranscriptEventBubble
+												key={item.key}
+												event={item.event}
+											/>
+										),
 									)}
-								</PopoverContent>
-							</Popover>
-						</div>
-
-						<div className="space-y-2">
-							<Label htmlFor="system-prompt">System Prompt</Label>
-							<Textarea
-								id="system-prompt"
-								rows={4}
-								value={systemPrompt}
-								onChange={(event) =>
-									dispatch(
-										setSystemPrompt(event.target.value),
-									)
-								}
-							/>
-						</div>
-
-						<div className="space-y-2">
-							<Dialog
-								open={isConfigurationOpen}
-								onOpenChange={setIsConfigurationOpen}
-							>
-								<DialogTrigger asChild>
-									<Button
-										variant="outline"
-										className="w-full justify-start gap-2"
-									>
-										<Settings className="h-4 w-4" />
-										Configuration
-									</Button>
-								</DialogTrigger>
-								<DialogContent>
-									<DialogHeader>
-										<DialogTitle>Configuration</DialogTitle>
-										<DialogDescription>
-											Configure permission mode and select
-											MCPs for this workspace.
-										</DialogDescription>
-									</DialogHeader>
-									<div className="space-y-4">
-										<div className="space-y-2">
-											<Label htmlFor="permission-mode">
-												Permission Mode
-											</Label>
-											<Select
-												value={permissionMode}
-												onValueChange={(value) => {
-													if (
-														isPermissionMode(value)
-													) {
-														dispatch(
-															setPermissionMode(
-																value,
-															),
-														);
-													}
-												}}
-											>
-												<SelectTrigger id="permission-mode">
-													<SelectValue placeholder="Select permission mode" />
-												</SelectTrigger>
-												<SelectContent>
-													{PERMISSION_MODE_OPTIONS.map(
-														(option) => (
-															<SelectItem
-																key={
-																	option.value
-																}
-																value={
-																	option.value
-																}
-															>
-																{option.label}
-															</SelectItem>
-														),
-													)}
-												</SelectContent>
-											</Select>
+									{isStreaming ? (
+										<div className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
+											<span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+											<span>Agent is working…</span>
 										</div>
-										<div className="space-y-2">
-											<Label>Available MCPs</Label>
+									) : null}
+								</>
+							)}
+						</div>
+
+						<footer className="border-t border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-white/60 to-slate-50/40 px-4 py-4">
+							<div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+								<Textarea
+									placeholder="Type a message…"
+									rows={2}
+									ref={chatInputRef}
+									value={inputMessage}
+									onChange={handleMessageChange}
+									onKeyDown={handleMessageKeyDown}
+									className="min-h-[3.25rem] max-h-60 flex-1 resize-none border-slate-200/60 bg-white/90 dark:bg-zinc-800/70 focus-visible:ring-slate-400/30"
+								/>
+								<Button
+									disabled={isSendDisabled}
+									onClick={handleSendMessage}
+									size="icon"
+									className="h-9 w-9 shrink-0 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20 transition-all duration-200 hover:shadow-lg hover:shadow-emerald-500/30 disabled:bg-slate-300 disabled:shadow-none dark:disabled:bg-zinc-700"
+								>
+									<ArrowUp className="h-4 w-4" />
+								</Button>
+							</div>
+						</footer>
+					</TabsContent>
+
+					<TabsContent
+						value="settings"
+						className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 p-4 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
+					>
+						<div className="flex flex-col gap-5">
+							<div className="space-y-2">
+								<p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
+									Session
+								</p>
+								<h2 className="text-lg font-semibold">
+									Room Settings
+								</h2>
+							</div>
+
+							<div className="space-y-2">
+								<Label>Harness Type</Label>
+								<div className="flex rounded-md border">
+									{HARNESS_TYPE_OPTIONS.map((option) => (
+										<button
+											key={option.value}
+											type="button"
+											onClick={() => {
+												if (
+													option.value === harnessType
+												)
+													return;
+												if (messages.length > 0) {
+													setPendingHarnessType(
+														option.value,
+													);
+												} else {
+													dispatch(
+														setHarnessType(
+															option.value,
+														),
+													);
+												}
+											}}
+											className={cn(
+												"flex-1 px-3 py-1.5 text-sm font-medium transition-colors",
+												"first:rounded-l-md last:rounded-r-md",
+												harnessType === option.value
+													? "bg-primary text-primary-foreground"
+													: "bg-transparent text-muted-foreground hover:bg-accent/60",
+											)}
+										>
+											{option.label}
+										</button>
+									))}
+								</div>
+							</div>
+
+							<div className="space-y-2">
+								<Label>Engine</Label>
+								<Popover
+									open={engineDropdownOpen}
+									onOpenChange={(open) => {
+										setEngineDropdownOpen(open);
+										if (!open) setEngineSearch("");
+									}}
+								>
+									<PopoverTrigger asChild>
+										<Button
+											variant="outline"
+											className="w-full justify-between font-normal"
+										>
+											<span className="truncate text-left">
+												{engineDisplayName ||
+													(engineId
+														? `${engineId.slice(0, 18)}...`
+														: "Select engine")}
+											</span>
+											<Search className="ml-2 h-4 w-4 shrink-0 text-muted-foreground" />
+										</Button>
+									</PopoverTrigger>
+									<PopoverContent
+										className="w-[260px] p-2"
+										align="start"
+									>
+										<Input
+											placeholder="Search models..."
+											value={engineSearch}
+											onChange={(e) =>
+												setEngineSearch(e.target.value)
+											}
+											className="mb-2 h-8 text-sm"
+											autoFocus
+										/>
+										{engineLoading ? (
+											<div className="py-4 text-center text-xs text-muted-foreground">
+												Loading...
+											</div>
+										) : engineResults.length === 0 ? (
+											<div className="py-4 text-center text-xs text-muted-foreground">
+												No models found.
+											</div>
+										) : (
+											<div className="max-h-52 overflow-y-auto">
+												{engineResults.map((engine) => (
+													<button
+														key={engine.id}
+														type="button"
+														onClick={() => {
+															dispatch(
+																setEngineId(
+																	engine.id,
+																),
+															);
+															dispatch(
+																setEngineDisplayName(
+																	engine.label,
+																),
+															);
+															setEngineDropdownOpen(
+																false,
+															);
+															setEngineSearch("");
+														}}
+														className={cn(
+															"flex w-full flex-col items-start rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/60",
+															engineId ===
+																engine.id &&
+																"bg-accent/80",
+														)}
+													>
+														<span className="font-medium leading-snug">
+															{engine.label}
+														</span>
+														<span className="w-full truncate font-mono text-xs text-muted-foreground">
+															{engine.id}
+														</span>
+													</button>
+												))}
+											</div>
+										)}
+									</PopoverContent>
+								</Popover>
+							</div>
+
+							<div className="space-y-2">
+								<Label htmlFor="system-prompt">
+									System Prompt
+								</Label>
+								<Textarea
+									id="system-prompt"
+									rows={4}
+									value={systemPrompt}
+									onChange={(event) =>
+										dispatch(
+											setSystemPrompt(event.target.value),
+										)
+									}
+								/>
+							</div>
+
+							<div className="space-y-2">
+								<Dialog
+									open={isConfigurationOpen}
+									onOpenChange={setIsConfigurationOpen}
+								>
+									<DialogTrigger asChild>
+										<Button
+											variant="outline"
+											className="w-full justify-start gap-2"
+										>
+											<Settings className="h-4 w-4" />
+											Configuration
+										</Button>
+									</DialogTrigger>
+									<DialogContent>
+										<DialogHeader>
+											<DialogTitle>
+												Configuration
+											</DialogTitle>
+											<DialogDescription>
+												Configure permission mode for
+												this workspace.
+											</DialogDescription>
+										</DialogHeader>
+										<div className="space-y-4">
+											<div className="space-y-2">
+												<Label htmlFor="permission-mode">
+													Permission Mode
+												</Label>
+												<Select
+													value={permissionMode}
+													onValueChange={(value) => {
+														if (
+															isPermissionMode(
+																value,
+															)
+														) {
+															dispatch(
+																setPermissionMode(
+																	value,
+																),
+															);
+														}
+													}}
+												>
+													<SelectTrigger id="permission-mode">
+														<SelectValue placeholder="Select permission mode" />
+													</SelectTrigger>
+													<SelectContent>
+														{PERMISSION_MODE_OPTIONS.map(
+															(option) => (
+																<SelectItem
+																	key={
+																		option.value
+																	}
+																	value={
+																		option.value
+																	}
+																>
+																	{
+																		option.label
+																	}
+																</SelectItem>
+															),
+														)}
+													</SelectContent>
+												</Select>
+											</div>
+										</div>
+										<DialogFooter>
+											<Button
+												type="button"
+												variant="outline"
+												onClick={() =>
+													setIsConfigurationOpen(
+														false,
+													)
+												}
+											>
+												Close
+											</Button>
+										</DialogFooter>
+									</DialogContent>
+								</Dialog>
+
+								<Dialog
+									open={isMcpOpen}
+									onOpenChange={(open) => {
+										setIsMcpOpen(open);
+										if (!open) setMcpSearch("");
+									}}
+								>
+									<DialogTrigger asChild>
+										<Button
+											variant="outline"
+											className="w-full justify-start gap-2"
+										>
+											<Search className="h-4 w-4" />
+											MCPs
+										</Button>
+									</DialogTrigger>
+									<DialogContent>
+										<DialogHeader>
+											<DialogTitle>MCPs</DialogTitle>
+											<DialogDescription>
+												Search and select the MCPs
+												available to this workspace.
+											</DialogDescription>
+										</DialogHeader>
+										<div className="space-y-3">
+											<Input
+												placeholder="Search MCPs..."
+												value={mcpSearch}
+												onChange={(e) =>
+													setMcpSearch(e.target.value)
+												}
+												className="h-8 text-sm"
+												autoFocus
+											/>
 											{normalizedMcps.length === 0 ? (
 												<p className="text-xs text-muted-foreground">
-													No MCPs available for this
-													workspace yet.
+													{mcpSearch
+														? "No MCPs match your search."
+														: "No MCPs available for this workspace yet."}
 												</p>
 											) : (
-												<div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-2">
+												<div className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-2">
 													{normalizedMcps.map(
 														(mcp, index) => {
 															const projectIdValue =
@@ -1200,230 +1319,56 @@ export const ChatInterface = () => {
 												</div>
 											)}
 										</div>
-									</div>
-									<DialogFooter>
-										<Button
-											type="button"
-											variant="outline"
-											onClick={() =>
-												setIsConfigurationOpen(false)
-											}
-										>
-											Close
-										</Button>
-									</DialogFooter>
-								</DialogContent>
-							</Dialog>
+										<DialogFooter>
+											<Button
+												type="button"
+												variant="outline"
+												onClick={() =>
+													setIsMcpOpen(false)
+												}
+											>
+												Close
+											</Button>
+										</DialogFooter>
+									</DialogContent>
+								</Dialog>
 
-							<Dialog
-								open={isSkillsOpen}
-								onOpenChange={setIsSkillsOpen}
-							>
-								<DialogTrigger asChild>
-									<Button
-										variant="outline"
-										className="w-full justify-start gap-2"
-										disabled={!projectId}
-									>
-										<BookOpen className="h-4 w-4" />
-										View Skills
-									</Button>
-								</DialogTrigger>
-								<DialogContent className="flex h-[78vh] w-[92vw] max-w-5xl flex-col">
-									<DialogHeader>
-										<DialogTitle>
-											Project Skills
-										</DialogTitle>
-										<DialogDescription></DialogDescription>
-									</DialogHeader>
-									<div className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-1">
-										{isLoadingSkills ? (
-											<p className="text-sm text-muted-foreground">
-												Loading skills...
-											</p>
-										) : skillsError ? (
-											<p className="text-sm text-destructive">
-												{skillsError}
-											</p>
-										) : !hasSkillsContent ? (
-											<div className="space-y-4">
+								<Dialog
+									open={isSkillsOpen}
+									onOpenChange={setIsSkillsOpen}
+								>
+									<DialogTrigger asChild>
+										<Button
+											variant="outline"
+											className="w-full justify-start gap-2"
+											disabled={!projectId}
+										>
+											<BookOpen className="h-4 w-4" />
+											View Skills
+										</Button>
+									</DialogTrigger>
+									<DialogContent className="flex h-[78vh] w-[92vw] max-w-5xl flex-col">
+										<DialogHeader>
+											<DialogTitle>
+												Project Skills
+											</DialogTitle>
+											<DialogDescription></DialogDescription>
+										</DialogHeader>
+										<div className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-1">
+											{isLoadingSkills ? (
 												<p className="text-sm text-muted-foreground">
-													No skills found for this
-													project.
+													Loading skills...
 												</p>
-												<Dialog
-													open={isCreateSkillOpen}
-													onOpenChange={(
-														nextOpen,
-													) => {
-														if (!isCreatingSkill) {
-															setIsCreateSkillOpen(
-																nextOpen,
-															);
-															if (!nextOpen) {
-																setCreateSkillError(
-																	null,
-																);
-															}
-														}
-													}}
-												>
-													<DialogTrigger asChild>
-														<Button
-															size="sm"
-															className="gap-1"
-														>
-															<Plus className="h-3.5 w-3.5" />
-															Create Skill
-														</Button>
-													</DialogTrigger>
-													<DialogContent>
-														<DialogHeader>
-															<DialogTitle>
-																Create Skill
-															</DialogTitle>
-															<DialogDescription>
-																Add a new skill
-																to this project.
-															</DialogDescription>
-														</DialogHeader>
-														<div className="space-y-4">
-															<div className="space-y-2">
-																<Label htmlFor="new-skill-name-empty">
-																	Skill Name
-																</Label>
-																<Input
-																	id="new-skill-name-empty"
-																	placeholder="my-skill.md"
-																	value={
-																		newSkillName
-																	}
-																	onChange={(
-																		event,
-																	) => {
-																		setNewSkillName(
-																			event
-																				.target
-																				.value,
-																		);
-																		setCreateSkillError(
-																			null,
-																		);
-																	}}
-																	autoFocus
-																/>
-															</div>
-															<div className="space-y-2">
-																<Label htmlFor="new-skill-content-empty">
-																	Content
-																</Label>
-																<Textarea
-																	id="new-skill-content-empty"
-																	rows={8}
-																	placeholder="Skill content..."
-																	value={
-																		newSkillContent
-																	}
-																	onChange={(
-																		event,
-																	) => {
-																		setNewSkillContent(
-																			event
-																				.target
-																				.value,
-																		);
-																		setCreateSkillError(
-																			null,
-																		);
-																	}}
-																	className="font-mono text-xs"
-																/>
-															</div>
-															{createSkillError ? (
-																<p className="text-sm text-destructive">
-																	{
-																		createSkillError
-																	}
-																</p>
-															) : null}
-														</div>
-														<DialogFooter>
-															<Button
-																type="button"
-																variant="outline"
-																onClick={() =>
-																	setIsCreateSkillOpen(
-																		false,
-																	)
-																}
-																disabled={
-																	isCreatingSkill
-																}
-															>
-																Cancel
-															</Button>
-															<Button
-																type="button"
-																onClick={
-																	handleCreateSkill
-																}
-																disabled={
-																	!newSkillName.trim() ||
-																	!newSkillContent.trim() ||
-																	isCreatingSkill
-																}
-															>
-																{isCreatingSkill
-																	? "Creating..."
-																	: "Create"}
-															</Button>
-														</DialogFooter>
-													</DialogContent>
-												</Dialog>
-											</div>
-										) : (
-											<div className="flex h-full min-h-0 flex-col space-y-3">
-												<div className="flex items-center gap-2">
-													<div className="overflow-x-auto flex-1">
-														<div className="inline-flex min-w-full gap-2 rounded-lg border border-border/60 bg-muted/30 p-1">
-															{skillTabs.map(
-																(tab) => {
-																	const isActive =
-																		tab.id ===
-																		activeSkillTab?.id;
-																	return (
-																		<button
-																			key={
-																				tab.id
-																			}
-																			type="button"
-																			onClick={() => {
-																				setActiveSkillTabId(
-																					tab.id,
-																				);
-																				setEditingSkillTabId(
-																					null,
-																				);
-																				setSkillSaveError(
-																					null,
-																				);
-																			}}
-																			className={cn(
-																				"rounded-md px-3 py-1.5 text-xs font-medium whitespace-nowrap transition",
-																				isActive
-																					? "bg-white text-foreground shadow-sm"
-																					: "text-muted-foreground hover:bg-white/70 hover:text-foreground",
-																			)}
-																		>
-																			{
-																				tab.label
-																			}
-																		</button>
-																	);
-																},
-															)}
-														</div>
-													</div>
+											) : skillsError ? (
+												<p className="text-sm text-destructive">
+													{skillsError}
+												</p>
+											) : !hasSkillsContent ? (
+												<div className="space-y-4">
+													<p className="text-sm text-muted-foreground">
+														No skills found for this
+														project.
+													</p>
 													<Dialog
 														open={isCreateSkillOpen}
 														onOpenChange={(
@@ -1446,11 +1391,10 @@ export const ChatInterface = () => {
 														<DialogTrigger asChild>
 															<Button
 																size="sm"
-																variant="outline"
-																className="gap-1 shrink-0"
+																className="gap-1"
 															>
 																<Plus className="h-3.5 w-3.5" />
-																New Skill
+																Create Skill
 															</Button>
 														</DialogTrigger>
 														<DialogContent>
@@ -1467,12 +1411,12 @@ export const ChatInterface = () => {
 															</DialogHeader>
 															<div className="space-y-4">
 																<div className="space-y-2">
-																	<Label htmlFor="new-skill-name">
+																	<Label htmlFor="new-skill-name-empty">
 																		Skill
 																		Name
 																	</Label>
 																	<Input
-																		id="new-skill-name"
+																		id="new-skill-name-empty"
 																		placeholder="my-skill.md"
 																		value={
 																			newSkillName
@@ -1493,11 +1437,11 @@ export const ChatInterface = () => {
 																	/>
 																</div>
 																<div className="space-y-2">
-																	<Label htmlFor="new-skill-content">
+																	<Label htmlFor="new-skill-content-empty">
 																		Content
 																	</Label>
 																	<Textarea
-																		id="new-skill-content"
+																		id="new-skill-content-empty"
 																		rows={8}
 																		placeholder="Skill content..."
 																		value={
@@ -1560,206 +1504,398 @@ export const ChatInterface = () => {
 														</DialogContent>
 													</Dialog>
 												</div>
-												<section className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-3">
-													{activeSkillTab ? (
-														<div className="flex h-full min-h-0 flex-col gap-3">
-															<div className="flex items-center justify-between gap-2">
-																{isActiveSkillEditing ? (
-																	<>
-																		<p className="text-xs text-muted-foreground">
-																			Edit
-																			and
-																			save
-																			this
-																			skill
-																			tab.
-																		</p>
-																		<div className="flex items-center gap-2">
-																			<Button
+											) : (
+												<div className="flex h-full min-h-0 flex-col space-y-3">
+													<div className="flex items-center gap-2">
+														<div className="overflow-x-auto flex-1">
+															<div className="inline-flex min-w-full gap-2 rounded-lg border border-border/60 bg-muted/30 p-1">
+																{skillTabs.map(
+																	(tab) => {
+																		const isActive =
+																			tab.id ===
+																			activeSkillTab?.id;
+																		return (
+																			<button
+																				key={
+																					tab.id
+																				}
 																				type="button"
-																				size="sm"
-																				variant="outline"
-																				onClick={
-																					handleCancelSkillEdit
-																				}
-																				disabled={
-																					isSavingSkill
-																				}
+																				onClick={() => {
+																					setActiveSkillTabId(
+																						tab.id,
+																					);
+																					setEditingSkillTabId(
+																						null,
+																					);
+																					setSkillSaveError(
+																						null,
+																					);
+																				}}
+																				className={cn(
+																					"rounded-md px-3 py-1.5 text-xs font-medium whitespace-nowrap transition",
+																					isActive
+																						? "bg-white text-foreground shadow-sm"
+																						: "text-muted-foreground hover:bg-white/70 hover:text-foreground",
+																				)}
 																			>
-																				Cancel
-																			</Button>
-																			<Button
-																				type="button"
-																				size="sm"
-																				onClick={
-																					handleSaveSkill
+																				{
+																					tab.label
 																				}
-																				disabled={
-																					!isActiveSkillDirty ||
-																					isSavingSkill
-																				}
-																			>
-																				{isSavingSkill
-																					? "Saving..."
-																					: "Save"}
-																			</Button>
-																		</div>
-																	</>
-																) : (
-																	<>
-																		<p className="text-xs text-muted-foreground">
-																			View
-																			this
-																			skill
-																			tab.
-																		</p>
-																		<div className="flex items-center gap-2">
-																			{activeSkillTab.id !==
-																			"claude-md" ? (
-																				<Button
-																					type="button"
-																					size="sm"
-																					variant="destructive"
-																					onClick={
-																						handleDeleteSkill
-																					}
-																					disabled={
-																						isDeletingSkill
-																					}
-																					className="gap-1"
-																				>
-																					<Trash2 className="h-3.5 w-3.5" />
-																					{isDeletingSkill
-																						? "Deleting..."
-																						: "Delete"}
-																				</Button>
-																			) : null}
-																			<Button
-																				type="button"
-																				size="sm"
-																				onClick={
-																					handleStartSkillEdit
-																				}
-																			>
-																				Edit
-																			</Button>
-																		</div>
-																	</>
+																			</button>
+																		);
+																	},
 																)}
 															</div>
-															{isActiveSkillEditing ? (
-																<>
-																	<Textarea
-																		value={
-																			activeSkillContent
-																		}
-																		onChange={(
-																			event,
-																		) => {
-																			setEditedSkillContentByTabId(
-																				(
-																					previous,
-																				) => ({
-																					...previous,
-																					[activeSkillTab.id]:
-																						event
-																							.target
-																							.value,
-																				}),
-																			);
-																			setSkillSaveError(
-																				null,
-																			);
-																		}}
-																		className="min-h-[14rem] flex-1 resize-none font-mono text-xs"
-																	/>
-																	{skillSaveError ? (
+														</div>
+														<Dialog
+															open={
+																isCreateSkillOpen
+															}
+															onOpenChange={(
+																nextOpen,
+															) => {
+																if (
+																	!isCreatingSkill
+																) {
+																	setIsCreateSkillOpen(
+																		nextOpen,
+																	);
+																	if (
+																		!nextOpen
+																	) {
+																		setCreateSkillError(
+																			null,
+																		);
+																	}
+																}
+															}}
+														>
+															<DialogTrigger
+																asChild
+															>
+																<Button
+																	size="sm"
+																	variant="outline"
+																	className="gap-1 shrink-0"
+																>
+																	<Plus className="h-3.5 w-3.5" />
+																	New Skill
+																</Button>
+															</DialogTrigger>
+															<DialogContent>
+																<DialogHeader>
+																	<DialogTitle>
+																		Create
+																		Skill
+																	</DialogTitle>
+																	<DialogDescription>
+																		Add a
+																		new
+																		skill to
+																		this
+																		project.
+																	</DialogDescription>
+																</DialogHeader>
+																<div className="space-y-4">
+																	<div className="space-y-2">
+																		<Label htmlFor="new-skill-name">
+																			Skill
+																			Name
+																		</Label>
+																		<Input
+																			id="new-skill-name"
+																			placeholder="my-skill.md"
+																			value={
+																				newSkillName
+																			}
+																			onChange={(
+																				event,
+																			) => {
+																				setNewSkillName(
+																					event
+																						.target
+																						.value,
+																				);
+																				setCreateSkillError(
+																					null,
+																				);
+																			}}
+																			autoFocus
+																		/>
+																	</div>
+																	<div className="space-y-2">
+																		<Label htmlFor="new-skill-content">
+																			Content
+																		</Label>
+																		<Textarea
+																			id="new-skill-content"
+																			rows={
+																				8
+																			}
+																			placeholder="Skill content..."
+																			value={
+																				newSkillContent
+																			}
+																			onChange={(
+																				event,
+																			) => {
+																				setNewSkillContent(
+																					event
+																						.target
+																						.value,
+																				);
+																				setCreateSkillError(
+																					null,
+																				);
+																			}}
+																			className="font-mono text-xs"
+																		/>
+																	</div>
+																	{createSkillError ? (
 																		<p className="text-sm text-destructive">
 																			{
-																				skillSaveError
+																				createSkillError
 																			}
 																		</p>
 																	) : null}
+																</div>
+																<DialogFooter>
+																	<Button
+																		type="button"
+																		variant="outline"
+																		onClick={() =>
+																			setIsCreateSkillOpen(
+																				false,
+																			)
+																		}
+																		disabled={
+																			isCreatingSkill
+																		}
+																	>
+																		Cancel
+																	</Button>
+																	<Button
+																		type="button"
+																		onClick={
+																			handleCreateSkill
+																		}
+																		disabled={
+																			!newSkillName.trim() ||
+																			!newSkillContent.trim() ||
+																			isCreatingSkill
+																		}
+																	>
+																		{isCreatingSkill
+																			? "Creating..."
+																			: "Create"}
+																	</Button>
+																</DialogFooter>
+															</DialogContent>
+														</Dialog>
+													</div>
+													<section className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-3">
+														{activeSkillTab ? (
+															<div className="flex h-full min-h-0 flex-col gap-3">
+																<div className="flex items-center justify-between gap-2">
+																	{isActiveSkillEditing ? (
+																		<>
+																			<p className="text-xs text-muted-foreground">
+																				Edit
+																				and
+																				save
+																				this
+																				skill
+																				tab.
+																			</p>
+																			<div className="flex items-center gap-2">
+																				<Button
+																					type="button"
+																					size="sm"
+																					variant="outline"
+																					onClick={
+																						handleCancelSkillEdit
+																					}
+																					disabled={
+																						isSavingSkill
+																					}
+																				>
+																					Cancel
+																				</Button>
+																				<Button
+																					type="button"
+																					size="sm"
+																					onClick={
+																						handleSaveSkill
+																					}
+																					disabled={
+																						!isActiveSkillDirty ||
+																						isSavingSkill
+																					}
+																				>
+																					{isSavingSkill
+																						? "Saving..."
+																						: "Save"}
+																				</Button>
+																			</div>
+																		</>
+																	) : (
+																		<>
+																			<p className="text-xs text-muted-foreground">
+																				View
+																				this
+																				skill
+																				tab.
+																			</p>
+																			<div className="flex items-center gap-2">
+																				{activeSkillTab.id !==
+																				"claude-md" ? (
+																					<Button
+																						type="button"
+																						size="sm"
+																						variant="destructive"
+																						onClick={
+																							handleDeleteSkill
+																						}
+																						disabled={
+																							isDeletingSkill
+																						}
+																						className="gap-1"
+																					>
+																						<Trash2 className="h-3.5 w-3.5" />
+																						{isDeletingSkill
+																							? "Deleting..."
+																							: "Delete"}
+																					</Button>
+																				) : null}
+																				<Button
+																					type="button"
+																					size="sm"
+																					onClick={
+																						handleStartSkillEdit
+																					}
+																				>
+																					Edit
+																				</Button>
+																			</div>
+																		</>
+																	)}
+																</div>
+																{isActiveSkillEditing ? (
+																	<>
+																		<Textarea
+																			value={
+																				activeSkillContent
+																			}
+																			onChange={(
+																				event,
+																			) => {
+																				setEditedSkillContentByTabId(
+																					(
+																						previous,
+																					) => ({
+																						...previous,
+																						[activeSkillTab.id]:
+																							event
+																								.target
+																								.value,
+																					}),
+																				);
+																				setSkillSaveError(
+																					null,
+																				);
+																			}}
+																			className="min-h-[14rem] flex-1 resize-none font-mono text-xs"
+																		/>
+																		{skillSaveError ? (
+																			<p className="text-sm text-destructive">
+																				{
+																					skillSaveError
+																				}
+																			</p>
+																		) : null}
+																		<div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border/50 bg-white/80 dark:bg-zinc-800/60 p-3">
+																			<p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
+																				Preview
+																			</p>
+																			<MarkdownRenderer
+																				content={
+																					activeSkillContent
+																				}
+																				className="text-sm text-foreground"
+																			/>
+																		</div>
+																	</>
+																) : (
 																	<div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border/50 bg-white/80 dark:bg-zinc-800/60 p-3">
 																		<p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
-																			Preview
+																			Content
 																		</p>
 																		<MarkdownRenderer
 																			content={
-																				activeSkillContent
+																				activeSkillTab.content
 																			}
 																			className="text-sm text-foreground"
 																		/>
 																	</div>
-																</>
-															) : (
-																<div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border/50 bg-white/80 dark:bg-zinc-800/60 p-3">
-																	<p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
-																		Content
-																	</p>
-																	<MarkdownRenderer
-																		content={
-																			activeSkillTab.content
-																		}
-																		className="text-sm text-foreground"
-																	/>
-																</div>
-															)}
-														</div>
-													) : (
-														<p className="text-sm text-muted-foreground">
-															No skill selected.
-														</p>
-													)}
-												</section>
-											</div>
-										)}
-									</div>
-									<DialogFooter>
-										<Button
-											type="button"
-											variant="outline"
-											onClick={() =>
-												setIsSkillsOpen(false)
-											}
-										>
-											Close
-										</Button>
-									</DialogFooter>
-								</DialogContent>
-							</Dialog>
+																)}
+															</div>
+														) : (
+															<p className="text-sm text-muted-foreground">
+																No skill
+																selected.
+															</p>
+														)}
+													</section>
+												</div>
+											)}
+										</div>
+										<DialogFooter>
+											<Button
+												type="button"
+												variant="outline"
+												onClick={() =>
+													setIsSkillsOpen(false)
+												}
+											>
+												Close
+											</Button>
+										</DialogFooter>
+									</DialogContent>
+								</Dialog>
+							</div>
 						</div>
-					</div>
-				</TabsContent>
-			</Tabs>
-		</div>
+					</TabsContent>
+				</Tabs>
+			</div>
 
-		<ConfirmationDialog
-			open={pendingHarnessType !== null}
-			title="Switch Harness Type?"
-			text="Switching the harness type will create a new chat. Your current conversation will be lost. Do you want to continue?"
-			buttons={
-				<>
-					<Button
-						variant="outline"
-						onClick={() => setPendingHarnessType(null)}
-					>
-						Cancel
-					</Button>
-					<Button
-						onClick={() => {
-							if (pendingHarnessType) {
-								dispatch(setHarnessType(pendingHarnessType));
-								dispatch(startNewRoom());
-							}
-							setPendingHarnessType(null);
-						}}
-					>
-						Continue
-					</Button>
-				</>
-			}
-		/>
+			<ConfirmationDialog
+				open={pendingHarnessType !== null}
+				title="Switch Harness Type?"
+				text="Switching the harness type will create a new chat. Your current conversation will be lost. Do you want to continue?"
+				buttons={
+					<>
+						<Button
+							variant="outline"
+							onClick={() => setPendingHarnessType(null)}
+						>
+							Cancel
+						</Button>
+						<Button
+							onClick={() => {
+								if (pendingHarnessType) {
+									dispatch(
+										setHarnessType(pendingHarnessType),
+									);
+									dispatch(startNewRoom());
+								}
+								setPendingHarnessType(null);
+							}}
+						>
+							Continue
+						</Button>
+					</>
+				}
+			/>
 		</>
 	);
 };
