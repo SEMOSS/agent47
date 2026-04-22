@@ -1,5 +1,8 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
-import type { ChatState } from "../slices/chatSlice";
+import {
+  selectEffectiveSystemPrompt,
+  type ChatState,
+} from "../slices/chatSlice";
 import type { MCPState } from "../slices/mcpSlice";
 import { addTranscriptEvent } from "../slices/transcriptSlice";
 import type { StreamingResponse } from "@/contexts/AppContext";
@@ -128,7 +131,7 @@ export const callClaudeCode = createAsyncThunk<
       // 1. Update room options first (synchronous)
       const updateRoomOptionsPixel = createUpdateRoomOptionsPixel(
         chat.roomId,
-        chat.systemPrompt,
+        selectEffectiveSystemPrompt({ chat }),
         selectedMcps,
         chat.engineId,
       );
@@ -242,6 +245,8 @@ export const callClaudeCode = createAsyncThunk<
           dispatch({ type: "chat/bumpIframeRefresh" });
         }, 500);
       }
+
+      // dispatch({ type: "chat/bumpIframeRefresh" });
 
       return { response: finalResponse ?? "" };
     } catch (error) {
