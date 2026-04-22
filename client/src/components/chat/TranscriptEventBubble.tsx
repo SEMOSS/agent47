@@ -95,16 +95,25 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
     const isSuccess =
         event.status === "completed" || event.status === "success";
     const isError = event.status === "error" || event.status === "failed";
+    const isRunning =
+        event.isPartial ||
+        event.status === "running" ||
+        event.status === "in_progress" ||
+        event.status === "progress";
     const StatusIcon = isError
         ? XCircle
         : isSuccess
           ? CheckCircle2
-          : CircleDot;
+          : isRunning
+            ? Loader2
+            : CircleDot;
     const statusColor = isError
         ? "text-red-500"
         : isSuccess
           ? "text-emerald-500"
-          : "text-amber-500";
+          : isRunning
+            ? "text-blue-500"
+            : "text-amber-500";
 
     const statsSummary = event.stats ? buildStatsSummary(event.stats) : "";
     const hasContent = !!event.content;
@@ -123,7 +132,7 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
                         <ExpandIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
                     ) : (
                         <StatusIcon
-                            className={`h-3.5 w-3.5 shrink-0 ${statusColor}`}
+                            className={`h-3.5 w-3.5 shrink-0 ${statusColor} ${isRunning ? "animate-spin" : ""}`}
                         />
                     )}
                     <span className="font-medium text-foreground/80">
@@ -135,7 +144,7 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
                         </span>
                     )}
                     <StatusIcon
-                        className={`h-3 w-3 shrink-0 ${statusColor} ${hasContent ? "" : "hidden"}`}
+                        className={`h-3 w-3 shrink-0 ${statusColor} ${hasContent ? "" : "hidden"} ${isRunning ? "animate-spin" : ""}`}
                     />
                     {event.durationMs > 0 && (
                         <span className="text-muted-foreground">
@@ -190,6 +199,9 @@ const AssistantTextBubble = ({ event }: { event: AssistantText }) => (
         </span>
         <div className="max-w-[75%] rounded-2xl px-4 py-3 text-sm bg-white/90 dark:bg-zinc-800/70 text-foreground border border-slate-200/50 dark:border-white/10 shadow-sm">
             <MarkdownRenderer content={event.text} />
+            {event.isPartial ? (
+                <span className="inline-block ml-1 h-3 w-0.5 animate-pulse bg-foreground/60" />
+            ) : null}
         </div>
     </div>
 );

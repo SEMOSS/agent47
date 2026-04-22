@@ -1,4 +1,4 @@
-import { ChatInterface, WebSocketTestPanel } from "@/components";
+import { ChatInterface } from "@/components";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -37,7 +37,6 @@ import {
   PanelRightOpen,
   Plus,
   RefreshCw,
-  Wifi,
 } from "lucide-react";
 import {
   useCallback,
@@ -137,8 +136,6 @@ export const HomePage = () => {
   const [isLoadProjectOpen, setIsLoadProjectOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
-  const [showWsTest, setShowWsTest] = useState(false);
-
   const activeProject = myProjects.find((p) => getProjectId(p) === projectId);
   const activeProjectName =
     getProjectName(activeProject).trim() ||
@@ -306,19 +303,6 @@ export const HomePage = () => {
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setShowWsTest((v) => !v)}
-              className="rounded-md p-1 text-muted-foreground hover:bg-slate-200/60 dark:hover:bg-zinc-700/60 hover:text-foreground transition-colors"
-              title="Test WebSocket"
-            >
-              <Wifi className="h-3.5 w-3.5" />
-            </button>
-            {showWsTest && (
-              <WebSocketTestPanel onClose={() => setShowWsTest(false)} />
-            )}
-          </div>
           <TooltipProvider delayDuration={100}>
             {roomId && (
               <Tooltip>

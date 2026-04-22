@@ -1,5 +1,103 @@
 import type { TranscriptEvent } from "@/types/transcript";
 
+type UnknownRecord = Record<string, unknown>;
+
+const asRecord = (value: unknown): UnknownRecord | null => {
+    if (value == null || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+    }
+    return value as UnknownRecord;
+};
+
+const readString = (
+    value: unknown,
+    fallback?: string,
+): string | undefined => {
+    if (typeof value === "string" && value.length > 0) {
+        return value;
+    }
+    return fallback;
+};
+
+const readBoolean = (value: unknown): boolean | undefined => {
+    if (typeof value === "boolean") {
+        return value;
+    }
+    if (typeof value === "string") {
+        if (value === "true") return true;
+        if (value === "false") return false;
+    }
+    return undefined;
+};
+
+const readNumber = (value: unknown, fallback = 0): number => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+    }
+    return fallback;
+};
+
+const readEventId = (
+    msg: UnknownRecord,
+    fallback?: string,
+): string | undefined =>
+    readString(
+        msg.eventId ?? msg.messageId ?? msg.uuid ?? msg.id,
+        fallback,
+    );
+
+const readToolUseId = (msg: UnknownRecord): string =>
+    String(msg.toolUseId ?? msg.toolCallId ?? msg.id ?? "");
+
+const extractToolDescription = (value: unknown): string | undefined => {
+    const msg = asRecord(value);
+    if (!msg) {
+        return readString(value);
+    }
+
+    return readString(
+        msg.description ??
+            msg.prompt ??
+            msg.file_path ??
+            msg.filePath ??
+            msg.command ??
+            msg.arguments,
+    );
+};
+
+const extractToolResultContent = (msg: UnknownRecord): string | undefined => {
+    const directContent = readString(msg.content);
+    if (directContent) {
+        return directContent;
+    }
+
+    const result = asRecord(msg.result);
+    if (result) {
+        return readString(result.content ?? result.detailedContent);
+    }
+
+    const error = asRecord(msg.error);
+    if (error) {
+        return readString(error.message);
+    }
+
+    const partialOutput = readString(msg.partialOutput);
+    if (partialOutput) {
+        return partialOutput;
+    }
+
+    const progressMessage = readString(msg.progressMessage);
+    if (progressMessage) {
+        return progressMessage;
+    }
+
+    return undefined;
+};
+
 /**
  * Detect the transcript event type by inspecting which fields are present.
  *
@@ -12,7 +110,7 @@ import type { TranscriptEvent } from "@/types/transcript";
  *   - has `text` (and no above)    → AssistantText
  */
 const inferKind = (
-    msg: Record<string, unknown>,
+    msg: UnknownRecord,
 ): TranscriptEvent["kind"] | null => {
     if ("toolName" in msg) return "tool-invocation";
     if ("durationMs" in msg) return "tool-result";
@@ -31,6 +129,8 @@ const looksLikeEvent = (msg: Record<string, unknown>): boolean => {
     if ("durationMs" in msg) return true;
     if ("promptId" in msg) return true;
     if ("text" in msg && typeof msg.text === "string") return true;
+    if ("messageId" in msg && typeof msg.messageId === "string") return true;
+    if ("toolCallId" in msg && typeof msg.toolCallId === "string") return true;
     if (Array.isArray(msg.texts) && (msg.texts as unknown[]).length > 0) {
         return true;
     }
@@ -56,30 +156,35 @@ const looksLikeEvent = (msg: Record<string, unknown>): boolean => {
  * an actual event.
  */
 const unwrapEnvelope = (raw: unknown): Record<string, unknown> | null => {
-    if (raw == null || typeof raw !== "object") {
+    const initial = asRecord(raw);
+    if (!initial) {
         return null;
     }
 
-    let msg = raw as Record<string, unknown>;
+    let msg = initial;
 
     for (let depth = 0; depth < 4; depth += 1) {
         if (looksLikeEvent(msg)) break;
 
-        if (
-            msg.data &&
-            typeof msg.data === "object" &&
-            !Array.isArray(msg.data)
-        ) {
-            msg = msg.data as Record<string, unknown>;
+        const data = asRecord(msg.data);
+        if (data) {
+            msg = {
+                ...("event" in msg ? { event: msg.event } : {}),
+                ...("uuid" in msg ? { uuid: msg.uuid } : {}),
+                ...("sessionId" in msg ? { sessionId: msg.sessionId } : {}),
+                ...data,
+            };
             continue;
         }
 
-        if (
-            msg.payload &&
-            typeof msg.payload === "object" &&
-            !Array.isArray(msg.payload)
-        ) {
-            msg = msg.payload as Record<string, unknown>;
+        const payload = asRecord(msg.payload);
+        if (payload) {
+            msg = {
+                ...("event" in msg ? { event: msg.event } : {}),
+                ...("uuid" in msg ? { uuid: msg.uuid } : {}),
+                ...("sessionId" in msg ? { sessionId: msg.sessionId } : {}),
+                ...payload,
+            };
             continue;
         }
 
@@ -93,7 +198,7 @@ const unwrapEnvelope = (raw: unknown): Record<string, unknown> | null => {
  * Parse a single flat message object into a TranscriptEvent.
  */
 const parseSingleEvent = (
-    msg: Record<string, unknown>,
+    msg: UnknownRecord,
 ): TranscriptEvent | null => {
     // If the backend includes a `kind` discriminant, use it directly
     const explicitKind = msg.kind as string | undefined;
@@ -113,11 +218,12 @@ const parseSingleEvent = (
         case "tool-invocation":
             return {
                 kind: "tool-invocation",
-                toolUseId: String(msg.toolUseId ?? ""),
-                toolName: String(msg.toolName ?? ""),
-                description: msg.description
-                    ? String(msg.description)
-                    : undefined,
+                eventId: readEventId(msg),
+                toolUseId: readToolUseId(msg),
+                toolName: String(msg.toolName ?? msg.name ?? ""),
+                description: extractToolDescription(
+                    msg.description ?? msg.arguments,
+                ),
                 subagentType: msg.subagentType
                     ? String(msg.subagentType)
                     : undefined,
@@ -127,30 +233,43 @@ const parseSingleEvent = (
         case "assistant-text":
             return {
                 kind: "assistant-text",
+                eventId: readEventId(msg),
                 text: String(msg.text ?? ""),
                 model: msg.model ? String(msg.model) : undefined,
+                isPartial: readBoolean(msg.isPartial),
+                parentToolUseId: readString(
+                    msg.parentToolUseId ?? msg.parentToolCallId,
+                ),
                 timestamp: String(msg.timestamp ?? ""),
             };
 
         case "tool-result": {
             const stats = msg.stats as Record<string, unknown> | undefined;
+            const success = readBoolean(msg.success);
+            const status = readString(msg.status)
+                ? String(msg.status)
+                : success === false
+                  ? "error"
+                  : "completed";
             return {
                 kind: "tool-result",
-                toolUseId: String(msg.toolUseId ?? ""),
-                status: String(msg.status ?? ""),
-                durationMs: Number(msg.durationMs ?? 0),
+                eventId: readEventId(msg),
+                toolUseId: readToolUseId(msg),
+                status,
+                isPartial: readBoolean(msg.isPartial),
+                durationMs: readNumber(msg.durationMs),
                 stats: stats
                     ? {
-                          readCount: Number(stats.readCount ?? 0),
-                          searchCount: Number(stats.searchCount ?? 0),
-                          bashCount: Number(stats.bashCount ?? 0),
-                          editFileCount: Number(stats.editFileCount ?? 0),
-                          linesAdded: Number(stats.linesAdded ?? 0),
-                          linesRemoved: Number(stats.linesRemoved ?? 0),
+                          readCount: readNumber(stats.readCount),
+                          searchCount: readNumber(stats.searchCount),
+                          bashCount: readNumber(stats.bashCount),
+                          editFileCount: readNumber(stats.editFileCount),
+                          linesAdded: readNumber(stats.linesAdded),
+                          linesRemoved: readNumber(stats.linesRemoved),
                       }
                     : undefined,
-                filePath: msg.filePath ? String(msg.filePath) : undefined,
-                content: msg.content ? String(msg.content) : undefined,
+                filePath: readString(msg.filePath),
+                content: extractToolResultContent(msg),
                 timestamp: String(msg.timestamp ?? ""),
             };
         }
@@ -184,23 +303,53 @@ export const parseTranscriptMessage = (
 
     if (hasTexts || hasInvocations) {
         const events: TranscriptEvent[] = [];
+        const parentEventId = readEventId(msg);
+        const parentTimestamp = readString(msg.timestamp, "");
+        const parentModel = readString(msg.model);
+        const parentPartial = readBoolean(msg.isPartial);
+        const parentToolUseId = readString(
+            msg.parentToolUseId ?? msg.parentToolCallId,
+        );
 
         if (hasTexts) {
-            for (const t of msg.texts as Record<string, unknown>[]) {
-                if (t && typeof t === "object") {
-                    const parsed = parseSingleEvent(t);
+            for (const [index, item] of (
+                msg.texts as Record<string, unknown>[]
+            ).entries()) {
+                const t = asRecord(item);
+                if (t) {
+                    const parsed = parseSingleEvent({
+                        ...t,
+                        eventId:
+                            readEventId(t) ??
+                            (parentEventId
+                                ? `${parentEventId}:text:${index}`
+                                : undefined),
+                        model: t.model ?? parentModel,
+                        isPartial: t.isPartial ?? parentPartial,
+                        parentToolUseId:
+                            t.parentToolUseId ??
+                            t.parentToolCallId ??
+                            parentToolUseId,
+                        timestamp: t.timestamp ?? parentTimestamp ?? "",
+                    });
                     if (parsed) events.push(parsed);
                 }
             }
         }
 
         if (hasInvocations) {
-            for (const inv of msg.toolInvocations as Record<
+            for (const invItem of msg.toolInvocations as Record<
                 string,
                 unknown
             >[]) {
-                if (inv && typeof inv === "object") {
-                    const parsed = parseSingleEvent(inv);
+                const inv = asRecord(invItem);
+                if (inv) {
+                    const parsed = parseSingleEvent({
+                        ...inv,
+                        eventId:
+                            readEventId(inv) ?? parentEventId ?? undefined,
+                        timestamp: inv.timestamp ?? parentTimestamp ?? "",
+                    });
                     if (parsed) events.push(parsed);
                 }
             }

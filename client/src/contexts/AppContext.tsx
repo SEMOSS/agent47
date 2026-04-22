@@ -25,11 +25,14 @@ import { useLoadingState } from "@/hooks";
  */
 export interface StreamingMessage {
 	stream_type: "content" | "thinking" | "tool";
-	data: {
+	data: Record<string, unknown> & {
 		content?: string;
 		thinking?: string;
 		finish_reason?: string;
-		[key: string]: unknown;
+		event?: string;
+		uuid?: string;
+		sessionId?: string;
+		data?: Record<string, unknown>;
 	};
 }
 
