@@ -123,9 +123,9 @@ export const callClaudeCode = createAsyncThunk<
 
       // Build MCP list
       const selectedMcps: MCPDetails[] = mcp.selectedMcps.map((x) => ({
-        id: x.project_id,
-        name: x.project_name,
-        type: "PROJECT",
+        id: x.id,
+        name: x.name,
+        type: x.type,
       }));
 
       // 1. Update room options first (synchronous)
@@ -138,32 +138,10 @@ export const callClaudeCode = createAsyncThunk<
       await runPixel(updateRoomOptionsPixel);
 
       // 2. Build the RunAgent pixel
-      const tools = [
-        "Skill",
-        "Bash",
-        "BashOutput",
-        "KillBash",
-        "Read",
-        "Write",
-        "Edit",
-        "MultiEdit",
-        "NotebookEdit",
-        "Glob",
-        "Grep",
-        "LS",
-        "WebSearch",
-        "WebFetch",
-        "TodoRead",
-        "TodoWrite",
-        "Task",
-        "AskUserQuestion",
-      ];
-      const allowedTools = tools.map((t) => `"${t}"`);
       const safeMessage = sanitizePixelArg(message);
 
       const paramMap = {
         project: targetProjectId,
-        allowedTools: `[${allowedTools}]`,
         permissionMode: chat.permissionMode,
       };
 

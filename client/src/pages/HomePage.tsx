@@ -28,7 +28,7 @@ import { Env } from "@semoss/sdk";
 import { useAppDispatch, useAppSelector } from "@/store";
 import { bumpIframeRefresh, setActiveProject } from "@/store/slices/chatSlice";
 import { createReactProject } from "@/store/slices/createProjectSlice";
-import { callGetUserMcps } from "@/store/slices/mcpSlice";
+import { hydrateDefaultMcps } from "@/store/slices/mcpSlice";
 import { queryMyProjects } from "@/store/slices/myProjects";
 import {
   ChevronDown,
@@ -166,7 +166,7 @@ export const HomePage = () => {
   // const iframeSrc = `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`;
 
   useEffect(() => {
-    dispatch(callGetUserMcps({ runPixel }));
+    void dispatch(hydrateDefaultMcps({ runPixel }));
     let isMounted = true;
     dispatch(queryMyProjects({ runPixel }))
       .unwrap()

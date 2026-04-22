@@ -12,6 +12,7 @@ import {
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
+  type UIEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -68,7 +69,10 @@ import {
 import {
   addSelectedMcp,
   callGetUserMcps,
+  type MCPItem,
   removeSelectedMcp,
+  resetMcpPickerState,
+  setMcpSearch,
 } from "@/store/slices/mcpSlice";
 import {
   createSkill,
@@ -82,28 +86,12 @@ import {
 } from "@/store/thunks/callClaudeCode";
 import { getTranscriptEventStableKey } from "@/types/transcript";
 
-type McpProject = {
-  project_name?: string;
-  projectName?: string;
-  project_id?: string;
-  projectId?: string;
-  project?: string;
-  id?: string;
-  name?: string;
-};
-
 type SkillTab = {
   id: string;
   label: string;
   skillName: string;
   content: string;
 };
-
-const getMcpProjectId = (mcp: McpProject) =>
-  mcp.project_id ?? mcp.projectId ?? mcp.project ?? mcp.id ?? "";
-
-const getMcpProjectName = (mcp: McpProject) =>
-  mcp.project_name ?? mcp.projectName ?? mcp.name ?? "Untitled MCP";
 
 const PERMISSION_MODE_OPTIONS: Array<{
   value: PermissionMode;
@@ -126,12 +114,6 @@ const HARNESS_TYPE_OPTIONS: Array<{
 const isPermissionMode = (value: string): value is PermissionMode =>
   PERMISSION_MODE_OPTIONS.some((option) => option.value === value);
 const MAX_CHAT_INPUT_HEIGHT_PX = 240;
-const DEFAULT_SELECTED_MCP_IDS = new Set([
-  "4b4e1df8-cff6-4345-863b-5631a0e51000",
-  // "67aa0dcf-04f5-460f-9075-bad8eeedad7e",
-  "394404bf-02e5-44b2-bc7c-e93d9b698f58",
-  "ce722163-2a8c-4667-b504-ce8732d77123",
-]);
 
 const MessageBubble = ({
   author,
@@ -206,16 +188,20 @@ export const ChatInterface = () => {
     messages,
     pendingMessageId,
   } = useAppSelector((state) => state.chat);
-  const availableMcps = useAppSelector((state) => state.mcp.mcps) as
-    | McpProject[]
-    | null;
-  const selectedMcps = useAppSelector((state) => state.mcp.selectedMcps);
+  const {
+    items: availableMcps,
+    pinnedItems: pinnedMcps,
+    selectedMcps,
+    search: mcpSearch,
+    offset: mcpOffset,
+    hasMore: mcpHasMore,
+    isLoading: isLoadingMcps,
+  } = useAppSelector((state) => state.mcp);
   const { skills, claudeMd } = useAppSelector((state) => state.skills);
   const transcriptEvents = useAppSelector((state) => state.transcript.events);
 
   const [isConfigurationOpen, setIsConfigurationOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
-  const [mcpSearch, setMcpSearch] = useState("");
   const [isSkillsOpen, setIsSkillsOpen] = useState(false);
   const [isLoadingSkills, setIsLoadingSkills] = useState(false);
   const [skillsError, setSkillsError] = useState<string | null>(null);
@@ -248,11 +234,17 @@ export const ChatInterface = () => {
   const isPinnedToBottomRef = useRef(true);
   const wasStreamingRef = useRef(false);
   const fetchedSkillsProjectIdRef = useRef<string | null>(null);
-  const didApplyDefaultMcpSelectionRef = useRef(false);
   const trimmedMessage = inputMessage.trim();
   const isStreaming = pendingMessageId !== null;
   const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
-  const selectedMcpIds = new Set(selectedMcps.map((mcp) => mcp.project_id));
+  const selectedMcpIds = useMemo(
+    () => new Set(selectedMcps.map((mcp) => mcp.id)),
+    [selectedMcps],
+  );
+  const pinnedMcpIds = useMemo(
+    () => new Set(pinnedMcps.map((mcp) => mcp.id)),
+    [pinnedMcps],
+  );
 
   // Merge chat messages and transcript events into a single chronological
   // timeline so each user prompt is followed by its own turn's assistant
@@ -387,16 +379,11 @@ export const ChatInterface = () => {
   );
 
   const handleToggleMcp = useCallback(
-    (mcp: McpProject, nextChecked: boolean) => {
-      const project_id = getMcpProjectId(mcp);
-      if (!project_id) {
-        return;
-      }
-      const project_name = getMcpProjectName(mcp);
+    (mcp: MCPItem, nextChecked: boolean) => {
       if (nextChecked) {
-        dispatch(addSelectedMcp({ project_id, project_name }));
+        dispatch(addSelectedMcp(mcp));
       } else {
-        dispatch(removeSelectedMcp(project_id));
+        dispatch(removeSelectedMcp(mcp.id));
       }
     },
     [dispatch],
@@ -429,26 +416,6 @@ export const ChatInterface = () => {
         setIsLoadingSkills(false);
       });
   }, [dispatch, projectId, runPixel]);
-
-  useEffect(() => {
-    if (didApplyDefaultMcpSelectionRef.current) {
-      return;
-    }
-    if (!Array.isArray(availableMcps)) {
-      return;
-    }
-
-    didApplyDefaultMcpSelectionRef.current = true;
-
-    for (const mcp of availableMcps) {
-      const project_id = getMcpProjectId(mcp);
-      if (!project_id || !DEFAULT_SELECTED_MCP_IDS.has(project_id)) {
-        continue;
-      }
-      const project_name = getMcpProjectName(mcp);
-      dispatch(addSelectedMcp({ project_id, project_name }));
-    }
-  }, [availableMcps, dispatch]);
 
   useEffect(() => {
     setEditedSkillContentByTabId({});
@@ -497,7 +464,14 @@ export const ChatInterface = () => {
   useEffect(() => {
     if (!isMcpOpen) return;
     const timer = setTimeout(() => {
-      void dispatch(callGetUserMcps({ runPixel, filterWord: mcpSearch }));
+      void dispatch(
+        callGetUserMcps({
+          runPixel,
+          filterWord: mcpSearch,
+          offset: 0,
+          append: false,
+        }),
+      );
     }, 300);
     return () => clearTimeout(timer);
   }, [mcpSearch, isMcpOpen, dispatch, runPixel]);
@@ -562,7 +536,57 @@ export const ChatInterface = () => {
     toast.success("Response complete", { duration: 2000 });
   }, [isStreaming, messages]);
 
-  const normalizedMcps = Array.isArray(availableMcps) ? availableMcps : [];
+  const orderedMcps = useMemo(() => {
+    const pinnedButNotSelected = pinnedMcps.filter(
+      (mcp) => !selectedMcpIds.has(mcp.id),
+    );
+    const pagedItems = availableMcps.filter(
+      (mcp) => !selectedMcpIds.has(mcp.id) && !pinnedMcpIds.has(mcp.id),
+    );
+
+    return [...selectedMcps, ...pinnedButNotSelected, ...pagedItems];
+  }, [
+    availableMcps,
+    pinnedMcps,
+    pinnedMcpIds,
+    selectedMcps,
+    selectedMcpIds,
+  ]);
+
+  const handleMcpListScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      if (!isMcpOpen || isLoadingMcps || !mcpHasMore) {
+        return;
+      }
+
+      const container = event.currentTarget;
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+
+      if (distanceFromBottom > 40) {
+        return;
+      }
+
+      void dispatch(
+        callGetUserMcps({
+          runPixel,
+          filterWord: mcpSearch,
+          offset: mcpOffset,
+          append: true,
+        }),
+      );
+    },
+    [
+      dispatch,
+      isLoadingMcps,
+      isMcpOpen,
+      mcpHasMore,
+      mcpOffset,
+      mcpSearch,
+      runPixel,
+    ],
+  );
+
   const skillTabs = useMemo<SkillTab[]>(() => {
     const tabs: SkillTab[] = [];
 
@@ -1126,7 +1150,9 @@ export const ChatInterface = () => {
                   open={isMcpOpen}
                   onOpenChange={(open) => {
                     setIsMcpOpen(open);
-                    if (!open) setMcpSearch("");
+                    if (!open) {
+                      dispatch(resetMcpPickerState());
+                    }
                   }}
                 >
                   <DialogTrigger asChild>
@@ -1149,49 +1175,55 @@ export const ChatInterface = () => {
                       <Input
                         placeholder="Search MCPs..."
                         value={mcpSearch}
-                        onChange={(e) => setMcpSearch(e.target.value)}
+                        onChange={(event) =>
+                          dispatch(setMcpSearch(event.target.value))
+                        }
                         className="h-8 text-sm"
                         autoFocus
                       />
-                      {normalizedMcps.length === 0 ? (
+                      {orderedMcps.length === 0 && !isLoadingMcps ? (
                         <p className="text-xs text-muted-foreground">
                           {mcpSearch
                             ? "No MCPs match your search."
                             : "No MCPs available for this workspace yet."}
                         </p>
                       ) : (
-                        <div className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-2">
-                          {normalizedMcps.map((mcp, index) => {
-                            const projectIdValue = getMcpProjectId(mcp);
-                            const projectNameValue = getMcpProjectName(mcp);
-                            const isSelected =
-                              projectIdValue &&
-                              selectedMcpIds.has(projectIdValue);
-                            const isDisabled = !projectIdValue;
-                            const mcpKey =
-                              projectIdValue ||
-                              projectNameValue ||
-                              `mcp-${index}`;
+                        <div
+                          className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-2"
+                          onScroll={handleMcpListScroll}
+                        >
+                          {orderedMcps.map((mcp) => {
+                            const isSelected = selectedMcpIds.has(mcp.id);
                             return (
                               <label
-                                key={mcpKey}
+                                key={mcp.id}
                                 className={cn(
                                   "flex items-center gap-2 rounded-md px-2 py-1 text-sm transition hover:bg-accent/40",
                                   isSelected && "bg-accent/60",
-                                  isDisabled && "cursor-not-allowed opacity-60",
                                 )}
                               >
                                 <Checkbox
                                   checked={isSelected}
-                                  disabled={isDisabled}
                                   onCheckedChange={(checked) =>
                                     handleToggleMcp(mcp, checked === true)
                                   }
                                 />
-                                <span>{projectNameValue}</span>
+                                <div className="min-w-0">
+                                  <span className="block truncate">
+                                    {mcp.name}
+                                  </span>
+                                  <span className="block text-[11px] uppercase tracking-wide text-muted-foreground">
+                                    {mcp.type}
+                                  </span>
+                                </div>
                               </label>
                             );
                           })}
+                          {isLoadingMcps ? (
+                            <div className="px-2 py-1 text-xs text-muted-foreground">
+                              Loading MCPs...
+                            </div>
+                          ) : null}
                         </div>
                       )}
                     </div>
