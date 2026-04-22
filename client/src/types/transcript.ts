@@ -24,6 +24,7 @@ export type UserPrompt = {
 export type ToolInvocation = {
     kind: "tool-invocation";
     toolUseId: string;
+    eventId?: string;
     toolName: string;
     description?: string;
     subagentType?: string;
@@ -32,8 +33,11 @@ export type ToolInvocation = {
 
 export type AssistantText = {
     kind: "assistant-text";
+    eventId?: string;
     text: string;
     model?: string;
+    isPartial?: boolean;
+    parentToolUseId?: string;
     timestamp: string;
 };
 
@@ -49,7 +53,9 @@ export type ToolStats = {
 export type ToolResult = {
     kind: "tool-result";
     toolUseId: string;
+    eventId?: string;
     status: string;
+    isPartial?: boolean;
     durationMs: number;
     stats?: ToolStats;
     filePath?: string;
@@ -62,3 +68,28 @@ export type TranscriptEvent =
     | ToolInvocation
     | AssistantText
     | ToolResult;
+
+export const getTranscriptEventStableKey = (
+    event: TranscriptEvent,
+): string | null => {
+    switch (event.kind) {
+        case "user-prompt":
+            return event.promptId
+                ? `user-prompt:${event.promptId}`
+                : null;
+        case "assistant-text":
+            return event.eventId
+                ? `assistant-text:${event.eventId}`
+                : null;
+        case "tool-invocation":
+            return event.toolUseId
+                ? `tool-invocation:${event.toolUseId}`
+                : null;
+        case "tool-result":
+            return event.toolUseId
+                ? `tool-result:${event.toolUseId}`
+                : null;
+        default:
+            return null;
+    }
+};

@@ -81,6 +81,7 @@ import {
 	callClaudeCode,
 	updateRoomOptions,
 } from "@/store/thunks/callClaudeCode";
+import { getTranscriptEventStableKey } from "@/types/transcript";
 
 type McpProject = {
 	project_name?: string;
@@ -218,12 +219,6 @@ export const ChatInterface = () => {
 	const selectedMcps = useAppSelector((state) => state.mcp.selectedMcps);
 	const { skills, claudeMd } = useAppSelector((state) => state.skills);
 	const transcriptEvents = useAppSelector((state) => state.transcript.events);
-	// Transcript events are now sourced from the async streaming poll in
-	// callClaudeCode. The websocket-based useTranscriptStream hook is left
-	// in place in the codebase for reference, but intentionally NOT invoked
-	// here so that mounting ChatInterface does not open a ws connection.
-	// Re-enable by uncommenting the line below.
-	// const { startWatching, stopWatching } = useTranscriptStream();
 
 	const [isConfigurationOpen, setIsConfigurationOpen] = useState(false);
 	const [isMcpOpen, setIsMcpOpen] = useState(false);
@@ -297,10 +292,11 @@ export const ChatInterface = () => {
 		}
 		transcriptEvents.forEach((event, index) => {
 			const parsed = Date.parse(event.timestamp);
+			const stableKey = getTranscriptEventStableKey(event);
 			items.push({
 				source: "transcript",
 				createdAt: Number.isFinite(parsed) ? parsed : 0,
-				key: `transcript-${event.kind}-${index}`,
+				key: stableKey ?? `transcript-${event.kind}-${index}`,
 				event,
 			});
 		});
@@ -323,10 +319,6 @@ export const ChatInterface = () => {
 
 		dispatch(addMessage({ role: "user", content: trimmedMessage }));
 
-		// Websocket watch lifecycle kept here for reference; painting now
-		// comes from the async stream inside callClaudeCode.
-		// startWatching(roomId);
-
 		dispatch(
 			callClaudeCode({
 				message: trimmedMessage,
@@ -336,9 +328,6 @@ export const ChatInterface = () => {
 				getPixelJobStreaming,
 			}),
 		);
-		// .finally(() => {
-		// 	stopWatching();
-		// });
 		dispatch(setInputMessage(""));
 	}, [
 		dispatch,

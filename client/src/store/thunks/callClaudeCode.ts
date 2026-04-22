@@ -181,10 +181,9 @@ export const callClaudeCode = createAsyncThunk<
         throw new Error("No job ID returned from pixel execution");
       }
 
-      // 4. Poll for the job to finish. Each tick returns any new streaming
+      // 4. Poll for the job to finish. Each tick returns any new transcript
       //    chunks in `response.message`; we parse them into TranscriptEvents
-      //    (same shape the websocket emits) and dispatch into the transcript
-      //    slice so the UI renders them.
+      //    and dispatch into the transcript slice so the UI renders them.
       let isPolling = true;
 
       while (isPolling) {
@@ -221,8 +220,8 @@ export const callClaudeCode = createAsyncThunk<
       }
 
       // 5. Get the final result from RunAgent so the thunk fulfills cleanly.
-      //    We deliberately do NOT paint this into the chat — the socket
-      //    transcript stream has already rendered the final assistant message.
+      //    We deliberately do NOT paint this into the chat — the transcript
+      //    stream has already rendered the final assistant message.
       const result = await getPixelAsyncResult<[unknown, string]>(jobId);
 
       if (result.errors.length > 0) {
