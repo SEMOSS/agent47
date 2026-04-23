@@ -106,14 +106,16 @@ const ToolInvocationBubble = ({ event }: { event: ToolInvocation }) => {
             <div className="flex items-start gap-2 max-w-[75%] rounded-xl border border-dashed border-slate-300 dark:border-white/15 bg-slate-50/80 dark:bg-zinc-800/40 px-3 py-2 text-xs text-muted-foreground">
                 <Icon className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-500 dark:text-blue-400" />
                 <div className="min-w-0 flex-1">
-                    <span className="font-medium text-foreground/80 break-all">
-                        {label}
-                    </span>
-                    {event.description && (
-                        <span className="ml-1.5 text-muted-foreground break-words">
-                            {event.description}
+                    <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-0.5">
+                        <span className="shrink-0 whitespace-nowrap font-medium text-foreground/80">
+                            {label}
                         </span>
-                    )}
+                        {event.description && (
+                            <span className="min-w-0 break-all text-muted-foreground">
+                                {event.description}
+                            </span>
+                        )}
+                    </div>
                 </div>
                 <span className="shrink-0 text-[10px] text-muted-foreground/60">
                     {formatTimestamp(event.timestamp)}
