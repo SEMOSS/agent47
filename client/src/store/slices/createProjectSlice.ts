@@ -3,7 +3,7 @@ import {
 	createAsyncThunk,
 	type PayloadAction,
 } from "@reduxjs/toolkit";
-import { callClaudeCode } from "../thunks/callClaudeCode";
+import { runAgentHarness } from "../thunks/runAgentHarness";
 import type { StreamingResponse } from "@/contexts/AppContext";
 
 type RunPixelFn = <T = unknown>(pixelString: string) => Promise<T>;
@@ -110,7 +110,7 @@ export const createProject = createAsyncThunk<
 			const claudePrompt =
 				"Analyze this project and create a CLAUDE.md file with project context, coding conventions, build instructions, and key architecture notes. Look at the directory structure, key config files, READMEs, and source code to understand the project.";
 			void dispatch(
-				callClaudeCode({
+				runAgentHarness({
 					message: claudePrompt,
 					runPixel,
 					runPixelAsync,

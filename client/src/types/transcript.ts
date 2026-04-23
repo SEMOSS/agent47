@@ -1,3 +1,5 @@
+export type TranscriptHarness = "claude_code" | "github_copilot";
+
 export type TranscriptMessageType =
     | "user"
     | "assistant"
@@ -19,6 +21,7 @@ export type UserPrompt = {
     promptId: string;
     text: string;
     timestamp: string;
+    harnessType?: TranscriptHarness;
 };
 
 export type ToolInvocation = {
@@ -29,6 +32,7 @@ export type ToolInvocation = {
     description?: string;
     subagentType?: string;
     timestamp: string;
+    harnessType?: TranscriptHarness;
 };
 
 export type AssistantText = {
@@ -40,6 +44,7 @@ export type AssistantText = {
     isPartial?: boolean;
     parentToolUseId?: string;
     timestamp: string;
+    harnessType?: TranscriptHarness;
 };
 
 export type ToolStats = {
@@ -64,6 +69,7 @@ export type ToolResult = {
     content?: string;
     detailedContent?: string;
     timestamp: string;
+    harnessType?: TranscriptHarness;
 };
 
 export type TranscriptEvent =

@@ -81,9 +81,8 @@ import {
   updateSkill,
 } from "@/store/slices/skillsSlice";
 import {
-  callClaudeCode,
-  updateRoomOptions,
-} from "@/store/thunks/callClaudeCode";
+  runAgentHarness,
+} from "@/store/thunks/runAgentHarness";
 import { getTranscriptEventStableKey } from "@/types/transcript";
 
 type SkillTab = {
@@ -110,6 +109,10 @@ const HARNESS_TYPE_OPTIONS: Array<{
   { value: "claude_code", label: "Claude Code" },
   { value: "github_copilot", label: "GitHub Copilot" },
 ];
+
+const getHarnessLabel = (harnessType: HarnessType) =>
+  HARNESS_TYPE_OPTIONS.find((option) => option.value === harnessType)?.label ??
+  "Agent";
 
 const isPermissionMode = (value: string): value is PermissionMode =>
   PERMISSION_MODE_OPTIONS.some((option) => option.value === value);
@@ -237,6 +240,7 @@ export const ChatInterface = () => {
   const trimmedMessage = inputMessage.trim();
   const isStreaming = pendingMessageId !== null;
   const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
+  const activeHarnessLabel = getHarnessLabel(harnessType);
   const selectedMcpIds = useMemo(
     () => new Set(selectedMcps.map((mcp) => mcp.id)),
     [selectedMcps],
@@ -303,7 +307,7 @@ export const ChatInterface = () => {
     dispatch(addMessage({ role: "user", content: trimmedMessage }));
 
     dispatch(
-      callClaudeCode({
+      runAgentHarness({
         message: trimmedMessage,
         runPixel,
         runPixelAsync,
@@ -933,7 +937,7 @@ export const ChatInterface = () => {
                   {isStreaming ? (
                     <div className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
                       <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-                      <span>Agent is working…</span>
+                      <span>{activeHarnessLabel} is working...</span>
                     </div>
                   ) : null}
                 </>

@@ -1,0 +1,207 @@
+import type { TranscriptEvent } from "@/types/transcript";
+import {
+    asRecord,
+    extractToolArgumentDescription,
+    extractToolDescription,
+    parseAggregateAssistantEvent,
+    parseSingleEvent,
+    readEventId,
+    readString,
+    unwrapEnvelope,
+} from "./shared";
+
+const parseAssistantMessageEvent = (
+    msg: Record<string, unknown>,
+): TranscriptEvent[] => {
+    const message = asRecord(msg.data) ?? msg;
+    const messageId =
+        readString(message.messageId) ?? readEventId(message);
+    const timestamp = readString(msg.timestamp ?? message.timestamp, "") ?? "";
+    const interactionId = readString(message.interactionId);
+    const toolRequests = Array.isArray(message.toolRequests)
+        ? message.toolRequests
+        : [];
+    const events: TranscriptEvent[] = [];
+
+    for (const [index, item] of toolRequests.entries()) {
+        const request = asRecord(item);
+        if (!request) {
+            continue;
+        }
+
+        const toolName = readString(request.name) ?? "";
+        if (toolName === "report_intent") {
+            const intent = extractToolArgumentDescription(request.arguments);
+            if (!intent) {
+                continue;
+            }
+
+            const parsedIntent = parseSingleEvent(
+                {
+                    kind: "assistant-text",
+                    eventId:
+                        readEventId(request) ??
+                        (messageId
+                            ? `${messageId}:intent:${index}`
+                            : undefined),
+                    text: intent,
+                    display: "intent",
+                    model: message.model,
+                    timestamp,
+                },
+                "github_copilot",
+            );
+
+            if (parsedIntent) {
+                events.push(parsedIntent);
+            }
+            continue;
+        }
+
+        const parsedToolInvocation = parseSingleEvent(
+            {
+                kind: "tool-invocation",
+                eventId:
+                    readEventId(request) ??
+                    (messageId ? `${messageId}:tool:${index}` : undefined),
+                toolCallId:
+                    request.toolCallId ??
+                    request.toolUseId ??
+                    request.id,
+                toolName,
+                description:
+                    extractToolDescription(request) ??
+                    extractToolArgumentDescription(request.arguments),
+                timestamp,
+            },
+            "github_copilot",
+        );
+
+        if (parsedToolInvocation) {
+            events.push(parsedToolInvocation);
+        }
+    }
+
+    if (typeof message.content === "string" && message.content.length > 0) {
+        const parsedMessage = parseSingleEvent(
+            {
+                kind: "assistant-text",
+                eventId: messageId ?? interactionId,
+                text: message.content,
+                model: message.model,
+                timestamp,
+            },
+            "github_copilot",
+        );
+
+        if (parsedMessage) {
+            events.push(parsedMessage);
+        }
+    }
+
+    return events;
+};
+
+const parseToolExecutionStartEvent = (
+    msg: Record<string, unknown>,
+): TranscriptEvent[] => {
+    const data = asRecord(msg.data);
+    if (!data) {
+        return [];
+    }
+
+    const parsed = parseSingleEvent(
+        {
+            kind: "tool-invocation",
+            eventId: readEventId(msg),
+            toolCallId: data.toolCallId,
+            toolName: readString(data.toolName),
+            description: extractToolDescription(data.arguments),
+            timestamp: String(msg.timestamp ?? ""),
+        },
+        "github_copilot",
+    );
+
+    return parsed ? [parsed] : [];
+};
+
+const parseToolExecutionCompleteEvent = (
+    msg: Record<string, unknown>,
+): TranscriptEvent[] => {
+    const data = asRecord(msg.data);
+    if (!data) {
+        return [];
+    }
+
+    const result = asRecord(data.result);
+    const parsed = parseSingleEvent(
+        {
+            kind: "tool-result",
+            eventId: readEventId(msg),
+            toolCallId: data.toolCallId,
+            toolName: readString(data.toolName),
+            status: readString(data.status),
+            success: data.success,
+            durationMs: data.durationMs ?? result?.durationMs,
+            content: result?.content,
+            result,
+            timestamp: String(msg.timestamp ?? ""),
+        },
+        "github_copilot",
+    );
+
+    return parsed ? [parsed] : [];
+};
+
+const parseTypedCopilotEvent = (
+    msg: Record<string, unknown>,
+): TranscriptEvent[] | null => {
+    const type = readString(msg.type);
+
+    if (type === "assistant.message") {
+        return parseAssistantMessageEvent(msg);
+    }
+
+    if (type === "tool.execution_start") {
+        return parseToolExecutionStartEvent(msg);
+    }
+
+    if (type === "tool.execution_complete") {
+        return parseToolExecutionCompleteEvent(msg);
+    }
+
+    return null;
+};
+
+export const parseGitHubCopilotTranscriptMessage = (
+    raw: unknown,
+): TranscriptEvent[] => {
+    const directMessage = asRecord(raw);
+    if (directMessage) {
+        const directEvents = parseTypedCopilotEvent(directMessage);
+        if (directEvents) {
+            return directEvents;
+        }
+    }
+
+    const msg = unwrapEnvelope(raw);
+    if (!msg) {
+        return [];
+    }
+
+    const typedEvents = parseTypedCopilotEvent(msg);
+    if (typedEvents) {
+        return typedEvents;
+    }
+
+    const aggregateEvents = parseAggregateAssistantEvent(
+        msg,
+        "github_copilot",
+    );
+    if (aggregateEvents.length > 0) {
+        return aggregateEvents;
+    }
+
+    const event = parseSingleEvent(msg, "github_copilot");
+    return event ? [event] : [];
+};

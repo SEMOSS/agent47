@@ -1,6 +1,7 @@
 import { useInsight, useWebSocket } from "@semoss/sdk/react";
 import { X } from "lucide-react";
 import { useRef, useState } from "react";
+import type { HarnessType } from "@/store/slices/chatSlice";
 
 /**
  * Small panel that tests the WebSocket connection by connecting
@@ -21,6 +22,7 @@ export const WebSocketTestPanel = ({ onClose }: { onClose: () => void }) => {
   const [logs, setLogs] = useState<string[]>([]);
   const [roomId, setRoomId] = useState("");
   const [watching, setWatching] = useState(false);
+  const [harnessType, setHarnessType] = useState<HarnessType>("claude_code");
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   const log = (msg: string) => {
@@ -48,12 +50,12 @@ export const WebSocketTestPanel = ({ onClose }: { onClose: () => void }) => {
     }
     try {
       if (watching) {
-        unwatch("claude_code", { roomId });
-        log(`> unwatch: claude_code (room: ${roomId})`);
+        unwatch(harnessType, { roomId });
+        log(`> unwatch: ${harnessType} (room: ${roomId})`);
         setWatching(false);
       } else {
-        watch("claude_code", { roomId });
-        log(`> watch: claude_code (room: ${roomId})`);
+        watch(harnessType, { roomId });
+        log(`> watch: ${harnessType} (room: ${roomId})`);
         setWatching(true);
       }
     } catch (err) {
@@ -105,6 +107,14 @@ export const WebSocketTestPanel = ({ onClose }: { onClose: () => void }) => {
           </button>
         </div>
         <div className="flex gap-2">
+          <select
+            value={harnessType}
+            onChange={(e) => setHarnessType(e.target.value as HarnessType)}
+            className="rounded-md border border-slate-200 dark:border-zinc-700 bg-transparent px-2 py-1 text-xs"
+          >
+            <option value="claude_code">Claude Code</option>
+            <option value="github_copilot">GitHub Copilot</option>
+          </select>
           <input
             type="text"
             value={roomId}

@@ -1,7 +1,8 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import { v4 as uuidv4 } from "uuid";
+import type { TranscriptHarness } from "@/types/transcript";
 import { createProject, createReactProject } from "./createProjectSlice";
-import { callClaudeCode } from "../thunks/callClaudeCode";
+import { runAgentHarness } from "../thunks/runAgentHarness";
 
 export type ChatMessage = {
   id: string;
@@ -20,7 +21,7 @@ export type PermissionMode =
   | "plan"
   | "bypassPermissions";
 
-export type HarnessType = "claude_code" | "github_copilot";
+export type HarnessType = TranscriptHarness;
 
 export interface ChatState {
   roomId: string;
@@ -153,16 +154,16 @@ const chatSlice = createSlice({
     },
   },
   extraReducers: (builder) => {
-    builder.addCase(callClaudeCode.pending, (state) => {
+    builder.addCase(runAgentHarness.pending, (state) => {
       // No placeholder message — the socket transcript stream owns the
       // assistant UI. We just flag in-flight state via pendingMessageId
       // so the composer knows to disable sending.
       state.pendingMessageId = createMessageId();
     });
-    builder.addCase(callClaudeCode.fulfilled, (state) => {
+    builder.addCase(runAgentHarness.fulfilled, (state) => {
       state.pendingMessageId = null;
     });
-    builder.addCase(callClaudeCode.rejected, (state) => {
+    builder.addCase(runAgentHarness.rejected, (state) => {
       if (state.pendingMessageId) {
         const now = new Date();
         state.messages.push({

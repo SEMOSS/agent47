@@ -1,6 +1,7 @@
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import type {
     AssistantText,
+    TranscriptHarness,
     ToolInvocation,
     ToolResult,
     ToolStats,
@@ -93,6 +94,17 @@ const buildStatsSummary = (stats: ToolStats): string => {
         parts.push(`+${stats.linesAdded} / -${stats.linesRemoved} lines`);
     }
     return parts.join(" \u00b7 ");
+};
+
+const getHarnessLabel = (harnessType?: TranscriptHarness) => {
+    switch (harnessType) {
+        case "github_copilot":
+            return "GitHub Copilot";
+        case "claude_code":
+            return "Claude Code";
+        default:
+            return "Agent";
+    }
 };
 
 const ToolInvocationBubble = ({ event }: { event: ToolInvocation }) => {
@@ -244,7 +256,7 @@ const AssistantIntentBubble = ({ event }: { event: AssistantText }) => (
 const AssistantMessageBubble = ({ event }: { event: AssistantText }) => (
     <div className="flex flex-col gap-1 items-start">
         <span className="text-xs text-muted-foreground">
-            Agent
+            {getHarnessLabel(event.harnessType)}
             {event.model && (
                 <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-mono">
                     {event.model}

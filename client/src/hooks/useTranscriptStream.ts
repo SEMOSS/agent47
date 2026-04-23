@@ -1,5 +1,6 @@
 import { parseTranscriptMessage } from "@/lib/parseTranscriptMessage";
 import { useAppDispatch } from "@/store";
+import type { HarnessType } from "@/store/slices/chatSlice";
 import { addTranscriptEvent } from "@/store/slices/transcriptSlice";
 import { useInsight, useWebSocket } from "@semoss/sdk/react";
 import { useCallback, useEffect, useRef } from "react";
@@ -13,7 +14,9 @@ import { useCallback, useEffect, useRef } from "react";
  * Incoming messages are automatically parsed and dispatched to the
  * transcript slice. The transcript is cleared on each new watch.
  */
-export const useTranscriptStream = () => {
+export const useTranscriptStream = (
+  harnessType: HarnessType = "claude_code",
+) => {
   const dispatch = useAppDispatch();
   const { insightId } = useInsight();
   const { watch, unwatch, lastMessage, isConnected, status, connect } =
@@ -36,14 +39,14 @@ export const useTranscriptStream = () => {
       const roomId = pendingRoomIdRef.current;
       pendingRoomIdRef.current = null;
       try {
-        watch("claude_code", { roomId });
+        watch(harnessType, { roomId });
         activeRoomIdRef.current = roomId;
         console.debug(`[transcript] Deferred watch sent for room ${roomId}`);
       } catch (error) {
         console.error("[transcript] Failed deferred watch:", error);
       }
     }
-  }, [isConnected, watch]);
+  }, [harnessType, isConnected, watch]);
 
   // Process incoming messages whenever lastMessage changes
   useEffect(() => {
@@ -57,12 +60,12 @@ export const useTranscriptStream = () => {
       lastMessage,
     );
 
-    const events = parseTranscriptMessage(lastMessage);
+    const events = parseTranscriptMessage(lastMessage, harnessType);
     for (const event of events) {
       console.log("[transcript] Parsed event:", event.kind, event);
       dispatch(addTranscriptEvent(event));
     }
-  }, [lastMessage, dispatch]);
+  }, [lastMessage, dispatch, harnessType]);
 
   const startWatching = useCallback(
     (roomId: string) => {
@@ -78,7 +81,7 @@ export const useTranscriptStream = () => {
       // Unwatch previous room if still active
       if (activeRoomIdRef.current) {
         try {
-          unwatch("claude_code", {
+          unwatch(harnessType, {
             roomId: activeRoomIdRef.current,
           });
         } catch {
@@ -98,14 +101,14 @@ export const useTranscriptStream = () => {
       }
 
       try {
-        watch("claude_code", { roomId });
+        watch(harnessType, { roomId });
         activeRoomIdRef.current = roomId;
         console.debug(`[transcript] Watching room ${roomId}`);
       } catch (error) {
         console.error("[transcript] Failed to watch room:", error);
       }
     },
-    [isConnected, status, watch, unwatch, connect],
+    [connect, harnessType, isConnected, status, watch, unwatch],
   );
 
   const stopWatching = useCallback(() => {
@@ -123,11 +126,11 @@ export const useTranscriptStream = () => {
     if (!isConnected) return;
 
     try {
-      unwatch("claude_code", { roomId });
+      unwatch(harnessType, { roomId });
     } catch {
       // ignore — connection may have dropped
     }
-  }, [isConnected, unwatch]);
+  }, [harnessType, isConnected, unwatch]);
 
   return { startWatching, stopWatching };
 };
