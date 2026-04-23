@@ -94,6 +94,38 @@ const getProjectId = (project?: ProjectSummary) =>
 const getProjectName = (project?: ProjectSummary) =>
   project?.project_name ?? project?.projectName ?? project?.name ?? "";
 
+const normalizeModulePath = (value: string | undefined) => {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed || trimmed === "/") {
+    return "";
+  }
+
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withLeadingSlash.replace(/\/+$/, "");
+};
+
+const buildIframeSrc = (projectId: string, modulePath?: string) => {
+  const normalizedProjectId = projectId.trim();
+  if (!normalizedProjectId) {
+    return "";
+  }
+
+  const origin =
+    typeof window !== "undefined"
+      ? window.location.origin
+      : import.meta.env.ENDPOINT || "";
+
+  if (!origin) {
+    return "";
+  }
+
+  const normalizedModulePath = normalizeModulePath(modulePath);
+  return new URL(
+    `${normalizedModulePath}/public_home/${normalizedProjectId}/portals/`,
+    origin,
+  ).toString();
+};
+
 const formatProjectDate = (value?: string) => {
   if (!value) {
     return "Last edited date unavailable";
@@ -146,24 +178,7 @@ export const HomePage = () => {
   const trimmedProjectName = newProjectName.trim();
   const isCreateDisabled = trimmedProjectName.length === 0 || isCreatingProject;
 
-  // DEV BLOCK
-  let iframeSrc = "";
-  if (
-    import.meta.env.ENDPOINT == "http://localhost:9090" ||
-    import.meta.env.ENDPOINT == "http://localhost:8080"
-  ) {
-    iframeSrc = projectId
-      ? // ? `${import.meta.env.ENDPOINT}/semoss-ui/packages/client/dist/#/s/${projectId}`
-        `${import.meta.env.ENDPOINT}/SemossWeb/packages/client/dist/#/s/${projectId}`
-      : "";
-  } else {
-    iframeSrc = projectId
-      ? `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`
-      : "";
-  }
-
-  //PROD BLOCK
-  // const iframeSrc = `${import.meta.env.ENDPOINT}/${import.meta.env.MODULE}/public_home/${projectId}/portals/`;
+  const iframeSrc = buildIframeSrc(projectId, Env.MODULE);
 
   useEffect(() => {
     void dispatch(hydrateDefaultMcps({ runPixel }));
