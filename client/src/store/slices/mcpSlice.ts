@@ -27,6 +27,7 @@ export interface MCPState {
 
 export const DEFAULT_SELECTED_MCP_IDS = [
     "4b4e1df8-cff6-4345-863b-5631a0e51000",
+    "08621bde-8f32-4f75-aeae-2c2fcdb6a8ae",
     "394404bf-02e5-44b2-bc7c-e93d9b698f58",
     "ce722163-2a8c-4667-b504-ce8732d77123",
 ];

@@ -46,7 +46,7 @@ const initialState: ChatState = {
   engineId: "aa876e7e-e78e-404d-b7db-1a44236bc2a5",
   engineDisplayName: "",
   systemPrompt:
-    "Only read and modify files within the current working directory. Do not traverse or inspect parent directories. Do not try to build the front end using bash/node/npm/pnpm. Use the <BuildAndPublishApp> tool which will safely and securely compile it. You should use this at the end of your messages if you make file changes.",
+    "Only read and modify files within the current working directory. Do not traverse or inspect parent directories. Do not try to build the front end using bash/node/npm/pnpm. Use the <BuildAndPublishApp> tool which will safely and securely compile it. You should use this at the end of your messages if you make file changes. If an agent-memory skill is available, follow its guidance for recalling and persisting lessons.",
   projectId: "",
   permissionMode: "acceptEdits",
   harnessType: "claude_code",
