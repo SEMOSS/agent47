@@ -28,53 +28,90 @@ export const githubCopilotPixelJobStreamFixture: StreamingMessage[] = [
         stream_type: "content",
         data: {
             event: "assistant",
-            uuid: "copilot-message-1",
+            uuid: "copilot-intent-1",
             sessionId: "copilot-run-1",
             data: {
                 model: "gpt-5",
+                timestamp: "2026-04-22T17:28:11.500000+00:00",
                 texts: [
                     {
-                        eventId: "copilot-message-1",
-                        text: "Searching the workspace",
+                        eventId: "copilot-intent-1",
+                        text: "Exploring codebase",
+                        display: "intent",
                         model: "gpt-5",
-                        isPartial: true,
-                        timestamp: "2026-04-22T17:28:12.000000+00:00",
+                        isPartial: false,
+                        timestamp: "2026-04-22T17:28:11.500000+00:00",
                     },
                 ],
             },
         },
     },
     {
-        stream_type: "content",
+        stream_type: "tool",
         data: {
-            event: "assistant",
-            uuid: "copilot-tool-1",
-            sessionId: "copilot-run-1",
+            type: "assistant.message",
+            id: "copilot-message-1",
+            timestamp: "2026-04-22T17:28:12.000000+00:00",
             data: {
-                toolInvocations: [
+                messageId: "copilot-message-1",
+                interactionId: "copilot-run-1",
+                content: "",
+                toolRequests: [
                     {
-                        toolUseId: "tool-call-1",
-                        toolName: "Bash",
-                        description: "Find assets directory",
-                        timestamp: "2026-04-22T17:28:13.000000+00:00",
+                        toolCallId: "tool-call-1",
+                        name: "view",
+                        type: "function",
+                        intentionSummary:
+                            "view the file at /Users/demo/app/client/src/App.tsx.",
+                        arguments: {
+                            path: "/Users/demo/app/client/src/App.tsx",
+                        },
                     },
                 ],
             },
         },
     },
     {
+        stream_type: "tool",
+        data: {
+            type: "tool.execution_start",
+            id: "copilot-tool-1",
+            timestamp: "2026-04-22T17:28:13.000000+00:00",
+            data: {
+                toolCallId: "tool-call-1",
+                toolName: "view",
+                arguments: {
+                    path: "/Users/demo/app/client/src/App.tsx",
+                },
+            },
+        },
+    },
+    {
+        stream_type: "tool",
+        data: {
+            type: "tool.execution_complete",
+            id: "copilot-tool-result-1",
+            timestamp: "2026-04-22T17:28:14.000000+00:00",
+            data: {
+                toolCallId: "tool-call-1",
+                success: true,
+                result: {
+                    content:
+                        '1. import { AppShell } from "@/components/AppShell";',
+                },
+            },
+        },
+    },
+    {
         stream_type: "content",
         data: {
-            event: "tool_result",
-            uuid: "tool-call-1",
-            sessionId: "copilot-run-1",
+            type: "assistant.message",
+            id: "copilot-message-2",
+            timestamp: "2026-04-22T17:28:15.000000+00:00",
             data: {
-                toolUseId: "tool-call-1",
-                status: "completed",
-                durationMs: 0,
-                content:
-                    "/Users/kunalppatel9/Documents/SEMOSS/workspace/Semoss/project",
-                timestamp: "2026-04-22T17:28:14.000000+00:00",
+                messageId: "copilot-message-2",
+                interactionId: "copilot-run-1",
+                content: "I found the main app entry point in `src/App.tsx`.",
             },
         },
     },

@@ -53,6 +53,38 @@ const readEventId = (
 const readToolUseId = (msg: UnknownRecord): string =>
     String(msg.toolUseId ?? msg.toolCallId ?? msg.id ?? "");
 
+const isNonEmptyString = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+
+const isInternalTool = (toolName: string | undefined): boolean =>
+    toolName === "report_intent";
+
+const extractToolArgumentDescription = (
+    value: unknown,
+): string | undefined => {
+    const msg = asRecord(value);
+    if (!msg) {
+        return readString(value);
+    }
+
+    return readString(
+        msg.intentionSummary ??
+            msg.description ??
+            msg.prompt ??
+            msg.file_path ??
+            msg.filePath ??
+            msg.path ??
+            msg.command ??
+            msg.pattern ??
+            msg.glob ??
+            msg.query ??
+            msg.url ??
+            msg.intent ??
+            msg.message ??
+            msg.arguments,
+    );
+};
+
 const extractToolDescription = (value: unknown): string | undefined => {
     const msg = asRecord(value);
     if (!msg) {
@@ -60,13 +92,36 @@ const extractToolDescription = (value: unknown): string | undefined => {
     }
 
     return readString(
-        msg.description ??
+        msg.intentionSummary ??
+            msg.description ??
             msg.prompt ??
             msg.file_path ??
             msg.filePath ??
+            msg.path ??
             msg.command ??
-            msg.arguments,
+            msg.pattern ??
+            msg.glob ??
+            msg.query ??
+            msg.url ??
+            msg.intent ??
+            extractToolArgumentDescription(msg.arguments),
     );
+};
+
+const extractToolDetailedContent = (
+    value: unknown,
+): string | undefined => {
+    const msg = asRecord(value);
+    if (!msg) {
+        return undefined;
+    }
+
+    const result = asRecord(msg.result);
+    if (result) {
+        return readString(result.detailedContent);
+    }
+
+    return undefined;
 };
 
 const extractToolResultContent = (msg: UnknownRecord): string | undefined => {
@@ -216,6 +271,10 @@ const parseSingleEvent = (
             };
 
         case "tool-invocation":
+            if (isInternalTool(readString(msg.toolName ?? msg.name))) {
+                return null;
+            }
+
             return {
                 kind: "tool-invocation",
                 eventId: readEventId(msg),
@@ -235,6 +294,10 @@ const parseSingleEvent = (
                 kind: "assistant-text",
                 eventId: readEventId(msg),
                 text: String(msg.text ?? ""),
+                display:
+                    readString(msg.display) === "intent"
+                        ? "intent"
+                        : "message",
                 model: msg.model ? String(msg.model) : undefined,
                 isPartial: readBoolean(msg.isPartial),
                 parentToolUseId: readString(
@@ -244,6 +307,10 @@ const parseSingleEvent = (
             };
 
         case "tool-result": {
+            if (isInternalTool(readString(msg.toolName))) {
+                return null;
+            }
+
             const stats = msg.stats as Record<string, unknown> | undefined;
             const success = readBoolean(msg.success);
             const status = readString(msg.status)
@@ -255,6 +322,7 @@ const parseSingleEvent = (
                 kind: "tool-result",
                 eventId: readEventId(msg),
                 toolUseId: readToolUseId(msg),
+                toolName: readString(msg.toolName),
                 status,
                 isPartial: readBoolean(msg.isPartial),
                 durationMs: readNumber(msg.durationMs),
@@ -270,6 +338,7 @@ const parseSingleEvent = (
                     : undefined,
                 filePath: readString(msg.filePath),
                 content: extractToolResultContent(msg),
+                detailedContent: extractToolDetailedContent(msg),
                 timestamp: String(msg.timestamp ?? ""),
             };
         }
@@ -277,6 +346,137 @@ const parseSingleEvent = (
         default:
             return null;
     }
+};
+
+const parseAssistantMessageEvent = (
+    msg: UnknownRecord,
+): TranscriptEvent[] => {
+    const message = asRecord(msg.data) ?? msg;
+    const messageId =
+        readString(message.messageId) ?? readEventId(message);
+    const timestamp = readString(msg.timestamp ?? message.timestamp, "") ?? "";
+    const interactionId = readString(message.interactionId);
+    const toolRequests = Array.isArray(message.toolRequests)
+        ? message.toolRequests
+        : [];
+    const events: TranscriptEvent[] = [];
+
+    for (const [index, item] of toolRequests.entries()) {
+        const request = asRecord(item);
+        if (!request) {
+            continue;
+        }
+
+        const toolName = readString(request.name) ?? "";
+        if (isInternalTool(toolName)) {
+            const intent = extractToolArgumentDescription(request.arguments);
+            if (intent) {
+                const parsed = parseSingleEvent({
+                    kind: "assistant-text",
+                    eventId:
+                        readEventId(request) ??
+                        (messageId
+                            ? `${messageId}:intent:${index}`
+                            : undefined),
+                    text: intent,
+                    display: "intent",
+                    model: message.model,
+                    timestamp,
+                });
+
+                if (parsed) {
+                    events.push(parsed);
+                }
+            }
+            continue;
+        }
+
+        const parsed = parseSingleEvent({
+            kind: "tool-invocation",
+            eventId:
+                readEventId(request) ??
+                (messageId ? `${messageId}:tool:${index}` : undefined),
+            toolCallId:
+                request.toolCallId ??
+                request.toolUseId ??
+                request.id,
+            toolName,
+            description:
+                extractToolDescription(request) ??
+                extractToolArgumentDescription(request.arguments),
+            timestamp,
+        });
+
+        if (parsed) {
+            events.push(parsed);
+        }
+    }
+
+    if (isNonEmptyString(message.content)) {
+        const parsed = parseSingleEvent({
+            kind: "assistant-text",
+            eventId: messageId ?? interactionId,
+            text: message.content,
+            model: message.model,
+            timestamp,
+        });
+
+        if (parsed) {
+            events.push(parsed);
+        }
+    }
+
+    return events;
+};
+
+const parseToolExecutionStartEvent = (
+    msg: UnknownRecord,
+): TranscriptEvent[] => {
+    const data = asRecord(msg.data);
+    if (!data) {
+        return [];
+    }
+
+    const toolName = readString(data.toolName);
+    if (isInternalTool(toolName)) {
+        return [];
+    }
+
+    const parsed = parseSingleEvent({
+        kind: "tool-invocation",
+        eventId: readEventId(msg),
+        toolCallId: data.toolCallId,
+        toolName,
+        description: extractToolDescription(data.arguments),
+        timestamp: String(msg.timestamp ?? ""),
+    });
+
+    return parsed ? [parsed] : [];
+};
+
+const parseToolExecutionCompleteEvent = (
+    msg: UnknownRecord,
+): TranscriptEvent[] => {
+    const data = asRecord(msg.data);
+    if (!data) {
+        return [];
+    }
+
+    const result = asRecord(data.result);
+    const parsed = parseSingleEvent({
+        kind: "tool-result",
+        eventId: readEventId(msg),
+        toolCallId: data.toolCallId,
+        toolName: readString(data.toolName),
+        status: readString(data.status),
+        success: data.success,
+        durationMs: data.durationMs ?? result?.durationMs,
+        content: result?.content,
+        result,
+        timestamp: String(msg.timestamp ?? ""),
+    });
+
+    return parsed ? [parsed] : [];
 };
 
 /**
@@ -292,8 +492,36 @@ const parseSingleEvent = (
 export const parseTranscriptMessage = (
     raw: unknown,
 ): TranscriptEvent[] => {
+    const directMessage = asRecord(raw);
+    const directType = readString(directMessage?.type);
+
+    if (directMessage && directType === "assistant.message") {
+        return parseAssistantMessageEvent(directMessage);
+    }
+
+    if (directMessage && directType === "tool.execution_start") {
+        return parseToolExecutionStartEvent(directMessage);
+    }
+
+    if (directMessage && directType === "tool.execution_complete") {
+        return parseToolExecutionCompleteEvent(directMessage);
+    }
+
     const msg = unwrapEnvelope(raw);
     if (!msg) return [];
+
+    const unwrappedType = readString(msg.type);
+    if (unwrappedType === "assistant.message") {
+        return parseAssistantMessageEvent(msg);
+    }
+
+    if (unwrappedType === "tool.execution_start") {
+        return parseToolExecutionStartEvent(msg);
+    }
+
+    if (unwrappedType === "tool.execution_complete") {
+        return parseToolExecutionCompleteEvent(msg);
+    }
 
     // "assistant" events may carry `texts` and/or `toolInvocations` arrays.
     // Extract each entry as its own event.

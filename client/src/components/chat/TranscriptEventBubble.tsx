@@ -12,8 +12,11 @@ import {
     ChevronDown,
     ChevronRight,
     CircleDot,
+    FileCode2,
     FileSearch,
     Loader2,
+    Pencil,
+    Sparkles,
     Terminal,
     Wrench,
     XCircle,
@@ -43,12 +46,42 @@ const formatDuration = (ms: number) => {
 };
 
 const TOOL_ICONS: Record<string, typeof Wrench> = {
-    Read: FileSearch,
-    Grep: FileSearch,
-    Glob: FileSearch,
-    Bash: Terminal,
-    Agent: Bot,
+    read: FileSearch,
+    view: FileSearch,
+    grep: FileSearch,
+    glob: FileSearch,
+    bash: Terminal,
+    agent: Bot,
+    edit: Pencil,
+    "nodebuildermcp-buildandpublishapp": FileCode2,
 };
+
+const TOOL_LABELS: Record<string, string> = {
+    bash: "Bash",
+    edit: "Edit",
+    glob: "Glob",
+    grep: "Grep",
+    read: "Read",
+    view: "View",
+    "nodebuildermcp-buildandpublishapp": "Build and Publish",
+};
+
+const toTitleCase = (value: string) =>
+    value
+        .replace(/[_-]+/g, " ")
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const getToolDisplayName = (toolName: string) => {
+    const normalized = toolName.trim();
+    if (!normalized) {
+        return "Tool";
+    }
+
+    return TOOL_LABELS[normalized.toLowerCase()] ?? toTitleCase(normalized);
+};
+
+const getToolIcon = (toolName: string) =>
+    TOOL_ICONS[toolName.trim().toLowerCase()] ?? Wrench;
 
 const buildStatsSummary = (stats: ToolStats): string => {
     const parts: string[] = [];
@@ -63,10 +96,10 @@ const buildStatsSummary = (stats: ToolStats): string => {
 };
 
 const ToolInvocationBubble = ({ event }: { event: ToolInvocation }) => {
-    const Icon = TOOL_ICONS[event.toolName] ?? Wrench;
+    const Icon = getToolIcon(event.toolName);
     const label = event.subagentType
-        ? `${event.toolName} (${event.subagentType})`
-        : event.toolName;
+        ? `${getToolDisplayName(event.toolName)} (${event.subagentType})`
+        : getToolDisplayName(event.toolName);
 
     return (
         <div className="flex flex-col gap-1 items-start">
@@ -116,8 +149,13 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
             : "text-amber-500";
 
     const statsSummary = event.stats ? buildStatsSummary(event.stats) : "";
-    const hasContent = !!event.content;
+    const previewContent = event.content ?? event.detailedContent;
+    const expandedContent = event.detailedContent ?? event.content;
+    const hasContent = !!previewContent;
     const ExpandIcon = expanded ? ChevronDown : ChevronRight;
+    const toolLabel = event.toolName
+        ? `${getToolDisplayName(event.toolName)} Result`
+        : "Tool Result";
 
     return (
         <div className="flex flex-col gap-1 items-start">
@@ -136,7 +174,7 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
                         />
                     )}
                     <span className="font-medium text-foreground/80">
-                        Tool Result
+                        {toolLabel}
                     </span>
                     {(hasContent || event.durationMs > 0) && (
                         <span className="text-muted-foreground/60">
@@ -172,12 +210,12 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
                 )}
                 {hasContent && !expanded && (
                     <p className="mt-1.5 text-[11px] text-muted-foreground/70 pl-5.5 line-clamp-2">
-                        {event.content}
+                        {previewContent}
                     </p>
                 )}
                 {hasContent && expanded && (
                     <div className="mt-2 pl-5.5 text-[12px] text-foreground/80 max-h-[400px] overflow-y-auto">
-                        <MarkdownRenderer content={event.content!} />
+                        <MarkdownRenderer content={expandedContent!} />
                     </div>
                 )}
             </div>
@@ -185,7 +223,23 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
     );
 };
 
-const AssistantTextBubble = ({ event }: { event: AssistantText }) => (
+const AssistantIntentBubble = ({ event }: { event: AssistantText }) => (
+    <div className="flex flex-col gap-1 items-start">
+        <div className="flex items-start gap-2 max-w-[75%] rounded-xl border border-dashed border-slate-300 dark:border-white/15 bg-slate-50/80 dark:bg-zinc-800/40 px-3 py-2 text-xs text-muted-foreground">
+            <Sparkles className="h-3.5 w-3.5 shrink-0 mt-0.5 text-violet-500 dark:text-violet-400" />
+            <div className="min-w-0 flex-1">
+                <span className="font-medium text-foreground/80 break-words">
+                    {event.text}
+                </span>
+            </div>
+            <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                {formatTimestamp(event.timestamp)}
+            </span>
+        </div>
+    </div>
+);
+
+const AssistantMessageBubble = ({ event }: { event: AssistantText }) => (
     <div className="flex flex-col gap-1 items-start">
         <span className="text-xs text-muted-foreground">
             Agent
@@ -217,7 +271,11 @@ export const TranscriptEventBubble = ({
         case "tool-result":
             return <ToolResultBubble event={event} />;
         case "assistant-text":
-            return <AssistantTextBubble event={event} />;
+            return event.display === "intent" ? (
+                <AssistantIntentBubble event={event} />
+            ) : (
+                <AssistantMessageBubble event={event} />
+            );
         case "user-prompt":
             return null;
         default:

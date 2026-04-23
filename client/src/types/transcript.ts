@@ -35,6 +35,7 @@ export type AssistantText = {
     kind: "assistant-text";
     eventId?: string;
     text: string;
+    display?: "message" | "intent";
     model?: string;
     isPartial?: boolean;
     parentToolUseId?: string;
@@ -54,12 +55,14 @@ export type ToolResult = {
     kind: "tool-result";
     toolUseId: string;
     eventId?: string;
+    toolName?: string;
     status: string;
     isPartial?: boolean;
     durationMs: number;
     stats?: ToolStats;
     filePath?: string;
     content?: string;
+    detailedContent?: string;
     timestamp: string;
 };
 

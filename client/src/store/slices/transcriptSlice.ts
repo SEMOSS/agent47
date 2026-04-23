@@ -2,6 +2,8 @@ import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import {
     getTranscriptEventStableKey,
     type TranscriptEvent,
+    type ToolInvocation,
+    type ToolResult,
 } from "@/types/transcript";
 import { startNewRoom } from "./chatSlice";
 
@@ -11,6 +13,35 @@ export interface TranscriptState {
 
 const initialState: TranscriptState = {
     events: [],
+};
+
+const findToolInvocation = (
+    events: TranscriptEvent[],
+    toolUseId: string,
+): ToolInvocation | undefined =>
+    events.find(
+        (event): event is ToolInvocation =>
+            event.kind === "tool-invocation" &&
+            event.toolUseId === toolUseId,
+    );
+
+const enrichToolResult = (
+    events: TranscriptEvent[],
+    event: ToolResult,
+): ToolResult => {
+    if (event.toolName) {
+        return event;
+    }
+
+    const invocation = findToolInvocation(events, event.toolUseId);
+    if (!invocation) {
+        return event;
+    }
+
+    return {
+        ...event,
+        toolName: invocation.toolName,
+    };
 };
 
 const mergeTranscriptEvent = (
@@ -54,7 +85,10 @@ const transcriptSlice = createSlice({
     initialState,
     reducers: {
         addTranscriptEvent(state, action: PayloadAction<TranscriptEvent>) {
-            const nextEvent = action.payload;
+            const nextEvent =
+                action.payload.kind === "tool-result"
+                    ? enrichToolResult(state.events, action.payload)
+                    : action.payload;
             const stableKey = getTranscriptEventStableKey(nextEvent);
 
             if (!stableKey) {
