@@ -1,4 +1,6 @@
-export type TranscriptHarness = "claude_code" | "github_copilot";
+export type TranscriptHarness =
+    | "claude_code"
+    | "github_copilot";
 
 export type TranscriptMessageType =
     | "user"

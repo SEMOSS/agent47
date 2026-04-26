@@ -41,15 +41,67 @@ const createRoomId = () => {
   return uuidv4();
 };
 
+const LAST_PROJECT_ID_KEY = "agent47:lastProjectId";
+const LAST_HARNESS_TYPE_KEY = "agent47:lastHarnessType";
+const LAST_ENGINE_ID_KEY = "agent47:lastEngineId";
+const LAST_ENGINE_DISPLAY_NAME_KEY = "agent47:lastEngineDisplayName";
+
+const VALID_HARNESS_TYPES: HarnessType[] = [
+  "claude_code",
+  "github_copilot",
+];
+
+const readLocalStorage = (key: string): string | null => {
+  try {
+    return typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeLocalStorage = (key: string, value: string) => {
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(key, value);
+    }
+  } catch {
+    // localStorage may be unavailable (private mode, quota); ignore
+  }
+};
+
+const loadInitialHarnessType = (): HarnessType => {
+  const stored = readLocalStorage(LAST_HARNESS_TYPE_KEY);
+  // Migrate the old "python sidecar" key to the unified github_copilot harness.
+  // The in-Java path was retired; everything routes through the Python sidecar
+  // under the single name "github_copilot".
+  if (stored === "github_copilot_py") {
+    writeLocalStorage(LAST_HARNESS_TYPE_KEY, "github_copilot");
+    return "github_copilot";
+  }
+  return stored && (VALID_HARNESS_TYPES as string[]).includes(stored)
+    ? (stored as HarnessType)
+    : "claude_code";
+};
+
+const loadInitialProjectId = (): string => readLocalStorage(LAST_PROJECT_ID_KEY) ?? "";
+
+const DEFAULT_ENGINE_ID = "aa876e7e-e78e-404d-b7db-1a44236bc2a5";
+
+const loadInitialEngineId = (): string =>
+  readLocalStorage(LAST_ENGINE_ID_KEY) ?? DEFAULT_ENGINE_ID;
+
+const loadInitialEngineDisplayName = (): string =>
+  readLocalStorage(LAST_ENGINE_DISPLAY_NAME_KEY) ?? "";
+
 const initialState: ChatState = {
   roomId: createRoomId(),
-  engineId: "aa876e7e-e78e-404d-b7db-1a44236bc2a5",
-  engineDisplayName: "",
+  engineId: loadInitialEngineId(),
+  engineDisplayName: loadInitialEngineDisplayName(),
   systemPrompt:
     "You are helping a user build and modify a React application that runs on the SEMOSS platform. Work exclusively within the current working directory — do not read, write, or traverse files in parent directories. Building the app is done exclusively through the \`BuildAndPublishApp\` tool, which takes the project id: \`${projectId}\`. Node, npm, pnpm, and other JavaScript build tooling are not available via Bash. Invoke \`BuildAndPublishApp\` once at the end of any turn that modified source files — not after every individual edit. When the user's request requires platform-specific code (calling models, querying databases, working with storage or vector catalogs), consult the relevant skill before writing code. Skill descriptions cover when to use them. If an agent-memory skill is available, follow its guidance for recalling and persisting lessons.",
-  projectId: "",
+  projectId: loadInitialProjectId(),
   permissionMode: "acceptEdits",
-  harnessType: "claude_code",
+  harnessType: loadInitialHarnessType(),
   inputMessage: "",
   messages: [],
   pendingMessageId: null,
@@ -91,26 +143,31 @@ const chatSlice = createSlice({
     },
     setEngineId(state, action: PayloadAction<string>) {
       state.engineId = action.payload;
+      writeLocalStorage(LAST_ENGINE_ID_KEY, action.payload);
     },
     setEngineDisplayName(state, action: PayloadAction<string>) {
       state.engineDisplayName = action.payload;
+      writeLocalStorage(LAST_ENGINE_DISPLAY_NAME_KEY, action.payload);
     },
     setSystemPrompt(state, action: PayloadAction<string>) {
       state.systemPrompt = action.payload;
     },
     setProjectId(state, action: PayloadAction<string>) {
       state.projectId = action.payload;
+      writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload);
     },
     setPermissionMode(state, action: PayloadAction<PermissionMode>) {
       state.permissionMode = action.payload;
     },
     setHarnessType(state, action: PayloadAction<HarnessType>) {
       state.harnessType = action.payload;
+      writeLocalStorage(LAST_HARNESS_TYPE_KEY, action.payload);
     },
     setActiveProject(state, action: PayloadAction<string>) {
       state.projectId = action.payload;
       state.roomId = createRoomId();
       state.iframeRefreshKey += 1;
+      writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload);
     },
     setInputMessage(state, action: PayloadAction<string>) {
       state.inputMessage = action.payload;
@@ -182,11 +239,13 @@ const chatSlice = createSlice({
       state.projectId = action.payload.projectId;
       state.roomId = createRoomId();
       state.iframeRefreshKey += 1;
+      writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload.projectId);
     });
     builder.addCase(createReactProject.fulfilled, (state, action) => {
       state.projectId = action.payload.projectId;
       state.roomId = createRoomId();
       state.iframeRefreshKey += 1;
+      writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload.projectId);
     });
   },
 });
