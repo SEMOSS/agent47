@@ -10,7 +10,7 @@ export const parseTranscriptMessage = (
     harnessType: TranscriptHarness = "claude_code",
 ): TranscriptEvent[] => {
     switch (harnessType) {
-        case "github_copilot":
+        case "github_copilot_py":
             return parseGitHubCopilotTranscriptMessage(raw);
         case "claude_code":
         default:

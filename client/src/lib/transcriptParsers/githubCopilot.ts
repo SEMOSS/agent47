@@ -49,7 +49,7 @@ const parseAssistantMessageEvent = (
                     model: message.model,
                     timestamp,
                 },
-                "github_copilot",
+                "github_copilot_py",
             );
 
             if (parsedIntent) {
@@ -74,7 +74,7 @@ const parseAssistantMessageEvent = (
                     extractToolArgumentDescription(request.arguments),
                 timestamp,
             },
-            "github_copilot",
+            "github_copilot_py",
         );
 
         if (parsedToolInvocation) {
@@ -91,7 +91,7 @@ const parseAssistantMessageEvent = (
                 model: message.model,
                 timestamp,
             },
-            "github_copilot",
+            "github_copilot_py",
         );
 
         if (parsedMessage) {
@@ -119,7 +119,7 @@ const parseToolExecutionStartEvent = (
             description: extractToolDescription(data.arguments),
             timestamp: String(msg.timestamp ?? ""),
         },
-        "github_copilot",
+        "github_copilot_py",
     );
 
     return parsed ? [parsed] : [];
@@ -147,7 +147,7 @@ const parseToolExecutionCompleteEvent = (
             result,
             timestamp: String(msg.timestamp ?? ""),
         },
-        "github_copilot",
+        "github_copilot_py",
     );
 
     return parsed ? [parsed] : [];
@@ -196,12 +196,12 @@ export const parseGitHubCopilotTranscriptMessage = (
 
     const aggregateEvents = parseAggregateAssistantEvent(
         msg,
-        "github_copilot",
+        "github_copilot_py",
     );
     if (aggregateEvents.length > 0) {
         return aggregateEvents;
     }
 
-    const event = parseSingleEvent(msg, "github_copilot");
+    const event = parseSingleEvent(msg, "github_copilot_py");
     return event ? [event] : [];
 };

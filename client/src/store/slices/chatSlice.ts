@@ -48,7 +48,7 @@ const LAST_ENGINE_DISPLAY_NAME_KEY = "agent47:lastEngineDisplayName";
 
 const VALID_HARNESS_TYPES: HarnessType[] = [
   "claude_code",
-  "github_copilot",
+  "github_copilot_py",
 ];
 
 const readLocalStorage = (key: string): string | null => {
@@ -71,12 +71,11 @@ const writeLocalStorage = (key: string, value: string) => {
 
 const loadInitialHarnessType = (): HarnessType => {
   const stored = readLocalStorage(LAST_HARNESS_TYPE_KEY);
-  // Migrate the old "python sidecar" key to the unified github_copilot harness.
-  // The in-Java path was retired; everything routes through the Python sidecar
-  // under the single name "github_copilot".
-  if (stored === "github_copilot_py") {
-    writeLocalStorage(LAST_HARNESS_TYPE_KEY, "github_copilot");
-    return "github_copilot";
+  // Flip the legacy in-Java github_copilot harness over to the Python sidecar.
+  // The UI no longer exposes the Java option.
+  if (stored === "github_copilot") {
+    writeLocalStorage(LAST_HARNESS_TYPE_KEY, "github_copilot_py");
+    return "github_copilot_py";
   }
   return stored && (VALID_HARNESS_TYPES as string[]).includes(stored)
     ? (stored as HarnessType)
@@ -120,7 +119,7 @@ const getAuthorLabel = (
 ) => {
   switch (role) {
     case "assistant":
-      return harnessType === "github_copilot" ? "GitHub Copilot" : "Agent";
+      return harnessType === "github_copilot_py" ? "GitHub Copilot" : "Agent";
     case "system":
       return "System";
     default:

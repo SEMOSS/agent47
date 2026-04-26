@@ -1,6 +1,6 @@
 export type TranscriptHarness =
     | "claude_code"
-    | "github_copilot";
+    | "github_copilot_py";
 
 export type TranscriptMessageType =
     | "user"

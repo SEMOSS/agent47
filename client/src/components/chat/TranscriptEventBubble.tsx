@@ -98,7 +98,7 @@ const buildStatsSummary = (stats: ToolStats): string => {
 
 const getHarnessLabel = (harnessType?: TranscriptHarness) => {
     switch (harnessType) {
-        case "github_copilot":
+        case "github_copilot_py":
             return "GitHub Copilot";
         case "claude_code":
             return "Claude Code";

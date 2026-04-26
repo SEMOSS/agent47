@@ -107,7 +107,7 @@ const HARNESS_TYPE_OPTIONS: Array<{
   label: string;
 }> = [
   { value: "claude_code", label: "Claude Code" },
-  { value: "github_copilot", label: "GitHub Copilot" },
+  { value: "github_copilot_py", label: "GitHub Copilot" },
 ];
 
 const getHarnessLabel = (harnessType: HarnessType) =>
