@@ -33,6 +33,7 @@ import { queryMyProjects } from "@/store/slices/myProjects";
 import {
   ChevronDown,
   FolderOpen,
+  Hammer,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -168,6 +169,7 @@ export const HomePage = () => {
   const [isLoadProjectOpen, setIsLoadProjectOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [isBuilding, setIsBuilding] = useState(false);
   const activeProject = myProjects.find((p) => getProjectId(p) === projectId);
   const activeProjectName =
     getProjectName(activeProject).trim() ||
@@ -237,6 +239,22 @@ export const HomePage = () => {
 
     writeStoredProjectId(normalizedProjectId);
   }, [projectId]);
+
+  const handleBuildAndPublish = useCallback(async () => {
+    if (!projectId || isBuilding) return;
+    setIsBuilding(true);
+    const buildAndPublishPixel = `BuildAndPublishApp(project='${projectId}')`;
+    try {
+      await runPixel(buildAndPublishPixel);
+    } catch (error) {
+      console.warn("BuildAndPublishApp failed:", error);
+    } finally {
+      setTimeout(() => {
+        dispatch(bumpIframeRefresh());
+        setIsBuilding(false);
+      }, 500);
+    }
+  }, [projectId, isBuilding, runPixel, dispatch]);
 
   const handleCreateProject = useCallback(async () => {
     if (!trimmedProjectName || isCreatingProject) {
@@ -317,6 +335,17 @@ export const HomePage = () => {
             title="Refresh preview"
           >
             <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={handleBuildAndPublish}
+            disabled={!projectId || isBuilding}
+            className="rounded-md p-1 text-muted-foreground hover:bg-slate-200/60 dark:hover:bg-zinc-700/60 hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Rebuild & publish project"
+          >
+            <Hammer
+              className={cn("h-3.5 w-3.5", isBuilding && "animate-pulse")}
+            />
           </button>
           <TooltipProvider delayDuration={100}>
             {roomId && (
