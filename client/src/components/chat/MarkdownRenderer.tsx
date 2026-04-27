@@ -228,7 +228,7 @@ const renderInline = (content: string, keyPrefix: string): ReactNode[] =>
 			return (
 				<code
 					key={key}
-					className="rounded bg-muted px-1 py-0.5 text-xs"
+					className="rounded bg-muted px-1 py-0.5 text-xs text-foreground"
 				>
 					{token.content}
 				</code>
