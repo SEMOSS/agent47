@@ -166,6 +166,9 @@ const chatSlice = createSlice({
       state.projectId = action.payload;
       state.roomId = createRoomId();
       state.iframeRefreshKey += 1;
+      state.messages = [];
+      state.pendingMessageId = null;
+      state.inputMessage = "";
       writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload);
     },
     setInputMessage(state, action: PayloadAction<string>) {
@@ -238,12 +241,18 @@ const chatSlice = createSlice({
       state.projectId = action.payload.projectId;
       state.roomId = createRoomId();
       state.iframeRefreshKey += 1;
+      state.messages = [];
+      state.pendingMessageId = null;
+      state.inputMessage = "";
       writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload.projectId);
     });
     builder.addCase(createReactProject.fulfilled, (state, action) => {
       state.projectId = action.payload.projectId;
       state.roomId = createRoomId();
       state.iframeRefreshKey += 1;
+      state.messages = [];
+      state.pendingMessageId = null;
+      state.inputMessage = "";
       writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload.projectId);
     });
   },

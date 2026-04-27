@@ -5,7 +5,8 @@ import {
     type ToolInvocation,
     type ToolResult,
 } from "@/types/transcript";
-import { startNewRoom } from "./chatSlice";
+import { setActiveProject, startNewRoom } from "./chatSlice";
+import { createProject, createReactProject } from "./createProjectSlice";
 
 export interface TranscriptState {
     events: TranscriptEvent[];
@@ -125,6 +126,15 @@ const transcriptSlice = createSlice({
         // Per-message sends do NOT clear it, so prior events persist across
         // consecutive turns in the same room.
         builder.addCase(startNewRoom, (state) => {
+            state.events = [];
+        });
+        builder.addCase(setActiveProject, (state) => {
+            state.events = [];
+        });
+        builder.addCase(createProject.fulfilled, (state) => {
+            state.events = [];
+        });
+        builder.addCase(createReactProject.fulfilled, (state) => {
             state.events = [];
         });
     },
