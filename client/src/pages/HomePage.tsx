@@ -20,7 +20,11 @@ import { attachPreviewIssues } from "@/lib/previewIssues";
 import { cn } from "@/lib/utils";
 import { Env } from "@semoss/sdk";
 import { useAppDispatch, useAppSelector } from "@/store";
-import { bumpIframeRefresh, setActiveProject } from "@/store/slices/chatSlice";
+import {
+  bumpIframeRefresh,
+  readLastRoomId,
+  setActiveProject,
+} from "@/store/slices/chatSlice";
 import { createReactProject } from "@/store/slices/createProjectSlice";
 import {
   capturePreviewIssue,
@@ -28,6 +32,7 @@ import {
 } from "@/store/slices/issuesSlice";
 import { hydrateDefaultMcps } from "@/store/slices/mcpSlice";
 import { queryMyProjects } from "@/store/slices/myProjects";
+import { resumeConversation } from "@/store/thunks/conversationHistory";
 import {
   Copy,
   FolderOpen,
@@ -226,10 +231,25 @@ export const HomePage = () => {
     const storedProjectId = readStoredProjectId().trim();
     storedProjectIdRef.current = storedProjectId || null;
 
-    if (storedProjectId && storedProjectId !== projectId) {
+    if (!storedProjectId) {
+      return;
+    }
+
+    if (storedProjectId !== projectId) {
       dispatch(setActiveProject(storedProjectId));
     }
-  }, [dispatch, projectId]);
+
+    const lastRoomId = readLastRoomId(storedProjectId);
+    if (lastRoomId) {
+      void dispatch(
+        resumeConversation({
+          roomId: lastRoomId,
+          projectId: storedProjectId,
+          runPixel,
+        }),
+      );
+    }
+  }, [dispatch, projectId, runPixel]);
 
   useEffect(() => {
     if (!projectsLoaded) {
@@ -248,7 +268,13 @@ export const HomePage = () => {
     }
 
     dispatch(setActiveProject(firstProjectId));
-  }, [dispatch, myProjects, projectId, projectsLoaded]);
+    const lastRoomId = readLastRoomId(firstProjectId);
+    if (lastRoomId) {
+      void dispatch(
+        resumeConversation({ roomId: lastRoomId, projectId: firstProjectId, runPixel }),
+      );
+    }
+  }, [dispatch, myProjects, projectId, projectsLoaded, runPixel]);
 
   useEffect(() => {
     const normalizedProjectId = projectId.trim();
@@ -334,9 +360,15 @@ export const HomePage = () => {
         `${`PullProjectFolderFromCloud(project='${nextProjectId}')`}`,
       );
       dispatch(setActiveProject(nextProjectId));
+      const lastRoomId = readLastRoomId(nextProjectId);
+      if (lastRoomId) {
+        void dispatch(
+          resumeConversation({ roomId: lastRoomId, projectId: nextProjectId, runPixel }),
+        );
+      }
       setIsLoadProjectOpen(false);
     },
-    [dispatch],
+    [dispatch, runPixel],
   );
 
   const handleCopyTechnicalDetail = useCallback(async (label: string, value: string) => {

@@ -6,6 +6,7 @@ import type {
     ToolResult,
     ToolStats,
     TranscriptEvent,
+    UserPrompt,
 } from "@/types/transcript";
 import {
     Bot,
@@ -274,6 +275,17 @@ const AssistantMessageBubble = ({ event }: { event: AssistantText }) => (
     </div>
 );
 
+const UserPromptBubble = ({ event }: { event: UserPrompt }) => (
+    <div className="flex flex-col gap-1 items-end">
+        <span className="text-xs text-muted-foreground">
+            You {" \u00b7 "} {formatTimestamp(event.timestamp)}
+        </span>
+        <div className="max-w-[75%] rounded-2xl px-4 py-3 text-sm bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md shadow-slate-500/15 dark:from-slate-600 dark:to-slate-700">
+            <MarkdownRenderer content={event.text} />
+        </div>
+    </div>
+);
+
 export const TranscriptEventBubble = ({
     event,
 }: {
@@ -291,7 +303,7 @@ export const TranscriptEventBubble = ({
                 <AssistantMessageBubble event={event} />
             );
         case "user-prompt":
-            return null;
+            return <UserPromptBubble event={event} />;
         default:
             return null;
     }

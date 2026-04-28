@@ -23,6 +23,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { ConversationHistoryPanel } from "@/components/chat/ConversationHistoryPanel";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
 import { IssuesPanel } from "@/components/chat/IssuesPanel";
@@ -118,6 +119,10 @@ const HARNESS_TYPE_OPTIONS: Array<{
   { value: "claude_code", label: "Claude Code" },
   { value: "github_copilot_py", label: "GitHub Copilot" },
 ];
+
+const getHarnessLabel = (harnessType: HarnessType) =>
+  HARNESS_TYPE_OPTIONS.find((option) => option.value === harnessType)?.label ??
+  "Agent";
 
 const isPermissionMode = (value: string): value is PermissionMode =>
   PERMISSION_MODE_OPTIONS.some((option) => option.value === value);
@@ -251,6 +256,7 @@ export const ChatInterface = () => {
   const trimmedMessage = inputMessage.trim();
   const isStreaming = pendingMessageId !== null;
   const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
+  const activeHarnessLabel = getHarnessLabel(harnessType);
   const selectedMcpIds = useMemo(
     () => new Set(selectedMcps.map((mcp) => mcp.id)),
     [selectedMcps],
@@ -260,19 +266,20 @@ export const ChatInterface = () => {
     [pinnedMcps],
   );
 
-  // Merge chat messages and transcript events into a single chronological
-  // timeline so each user prompt is followed by its own turn's assistant
-  // events (rather than all messages appearing above all transcript events).
+  // Merge non-user legacy chat messages (for example system errors) with
+  // transcript events. User prompts already arrive through the transcript
+  // stream/history for both harnesses, so rendering chat-state user messages
+  // here would duplicate the same bubble.
   type TimelineItem =
     | {
         source: "message";
-        createdAt: number;
+        createdAt: number | null;
         key: string;
         message: ChatMessage;
       }
     | {
         source: "transcript";
-        createdAt: number;
+        createdAt: number | null;
         key: string;
         event: (typeof transcriptEvents)[number];
       };
@@ -280,6 +287,9 @@ export const ChatInterface = () => {
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [];
     for (const message of messages) {
+      if (message.role === "user") {
+        continue;
+      }
       items.push({
         source: "message",
         createdAt: message.createdAt ?? 0,
@@ -292,7 +302,7 @@ export const ChatInterface = () => {
       const stableKey = getTranscriptEventStableKey(event);
       items.push({
         source: "transcript",
-        createdAt: Number.isFinite(parsed) ? parsed : 0,
+        createdAt: Number.isFinite(parsed) ? parsed : null,
         key: stableKey ?? `transcript-${event.kind}-${index}`,
         event,
       });
@@ -301,9 +311,17 @@ export const ChatInterface = () => {
     return items
       .map((item, index) => ({ item, index }))
       .sort((a, b) => {
-        if (a.item.createdAt !== b.item.createdAt) {
-          return a.item.createdAt - b.item.createdAt;
+        const aHasTime = a.item.createdAt !== null;
+        const bHasTime = b.item.createdAt !== null;
+
+        if (aHasTime && bHasTime && a.item.createdAt !== b.item.createdAt) {
+          return (a.item.createdAt ?? 0) - (b.item.createdAt ?? 0);
         }
+
+        if (aHasTime !== bHasTime) {
+          return aHasTime ? -1 : 1;
+        }
+
         return a.index - b.index;
       })
       .map(({ item }) => item);
@@ -960,6 +978,7 @@ export const ChatInterface = () => {
                 <TabsTrigger value="settings">Settings</TabsTrigger>
               </TabsList>
               <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1">
+                <ConversationHistoryPanel />
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1014,7 +1033,7 @@ export const ChatInterface = () => {
                   {isStreaming ? (
                     <div className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
                       <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-                      <span>Working on your app...</span>
+                      <span>{activeHarnessLabel} is working...</span>
                     </div>
                   ) : null}
                 </>
@@ -1072,7 +1091,10 @@ export const ChatInterface = () => {
                       type="button"
                       onClick={() => {
                         if (option.value === harnessType) return;
-                        if (messages.length > 0) {
+                        if (
+                          messages.length > 0 ||
+                          transcriptEvents.length > 0
+                        ) {
                           setPendingHarnessType(option.value);
                         } else {
                           dispatch(setHarnessType(option.value));

@@ -51,12 +51,17 @@ export const submitAgentMessage =
       return;
     }
 
-    const { projectId } = getState().chat;
+    const state = getState();
+    const { projectId, messages } = state.chat;
+    const hasExistingConversationContent =
+      state.transcript.events.length > 0 ||
+      messages.some((chatMessage) => chatMessage.role !== "system");
 
     dispatch(addMessage({ role: "user", content: trimmedMessage }));
     dispatch(
       runAgentHarness({
         message: trimmedMessage,
+        shouldGenerateRoomName: !hasExistingConversationContent,
         runPixel,
         runPixelAsync,
         getPixelAsyncResult,

@@ -11,6 +11,10 @@ import {
     unwrapEnvelope,
 } from "./shared";
 
+const isSyntheticSkillContextPrompt = (event: TranscriptEvent | null) =>
+    event?.kind === "user-prompt" &&
+    /^\s*<skill-context\b/i.test(event.text);
+
 const parseAssistantMessageEvent = (
     msg: Record<string, unknown>,
 ): TranscriptEvent[] => {
@@ -217,5 +221,8 @@ export const parseGitHubCopilotTranscriptMessage = (
     }
 
     const event = parseSingleEvent(msg, "github_copilot_py");
+    if (isSyntheticSkillContextPrompt(event)) {
+        return [];
+    }
     return event ? [event] : [];
 };
