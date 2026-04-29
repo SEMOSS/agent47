@@ -4,6 +4,13 @@ import type { TranscriptHarness } from "@/types/transcript";
 import { createProject, createReactProject } from "./createProjectSlice";
 import { runAgentHarness } from "../thunks/runAgentHarness";
 
+export type ConversationRoom = {
+  roomId: string;
+  roomName: string;
+  dateCreated: string;
+  pinned: boolean;
+};
+
 export type ChatMessage = {
   id: string;
   author: string;
@@ -35,6 +42,8 @@ export interface ChatState {
   messages: ChatMessage[];
   pendingMessageId: string | null;
   iframeRefreshKey: number;
+  conversationList: ConversationRoom[];
+  isLoadingConversations: boolean;
 }
 
 const createRoomId = () => {
@@ -69,6 +78,15 @@ const writeLocalStorage = (key: string, value: string) => {
   }
 };
 
+export const lastRoomIdKey = (projectId: string) =>
+  `agent47:lastRoomId:${projectId}`;
+
+export const readLastRoomId = (projectId: string): string | null =>
+  readLocalStorage(lastRoomIdKey(projectId));
+
+export const writeLastRoomId = (projectId: string, roomId: string) =>
+  writeLocalStorage(lastRoomIdKey(projectId), roomId);
+
 const loadInitialHarnessType = (): HarnessType => {
   const stored = readLocalStorage(LAST_HARNESS_TYPE_KEY);
   // Flip the legacy in-Java github_copilot harness over to the Python sidecar.
@@ -92,8 +110,17 @@ const loadInitialEngineId = (): string =>
 const loadInitialEngineDisplayName = (): string =>
   readLocalStorage(LAST_ENGINE_DISPLAY_NAME_KEY) ?? "";
 
+const loadInitialRoomId = (): string => {
+  const projectId = loadInitialProjectId();
+  if (projectId) {
+    const saved = readLastRoomId(projectId);
+    if (saved) return saved;
+  }
+  return createRoomId();
+};
+
 const initialState: ChatState = {
-  roomId: createRoomId(),
+  roomId: loadInitialRoomId(),
   engineId: loadInitialEngineId(),
   engineDisplayName: loadInitialEngineDisplayName(),
   systemPrompt:
@@ -105,6 +132,8 @@ const initialState: ChatState = {
   messages: [],
   pendingMessageId: null,
   iframeRefreshKey: 0,
+  conversationList: [],
+  isLoadingConversations: false,
 };
 
 const createMessageId = () =>
@@ -133,12 +162,19 @@ const chatSlice = createSlice({
   reducers: {
     setRoomId(state, action: PayloadAction<string>) {
       state.roomId = action.payload;
+      if (state.projectId && action.payload) {
+        writeLastRoomId(state.projectId, action.payload);
+      }
     },
     startNewRoom(state) {
-      state.roomId = createRoomId();
+      const nextRoomId = createRoomId();
+      state.roomId = nextRoomId;
       state.messages = [];
       state.pendingMessageId = null;
       state.inputMessage = "";
+      if (state.projectId) {
+        writeLastRoomId(state.projectId, nextRoomId);
+      }
     },
     setEngineId(state, action: PayloadAction<string>) {
       state.engineId = action.payload;
@@ -163,19 +199,48 @@ const chatSlice = createSlice({
       writeLocalStorage(LAST_HARNESS_TYPE_KEY, action.payload);
     },
     setActiveProject(state, action: PayloadAction<string>) {
-      state.projectId = action.payload;
-      state.roomId = createRoomId();
+      if (state.projectId && state.roomId) {
+        writeLastRoomId(state.projectId, state.roomId);
+      }
+
+      const nextProjectId = action.payload;
+      const restoredRoomId = readLastRoomId(nextProjectId);
+
+      state.projectId = nextProjectId;
+      state.roomId = restoredRoomId ?? createRoomId();
       state.iframeRefreshKey += 1;
       state.messages = [];
       state.pendingMessageId = null;
       state.inputMessage = "";
-      writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload);
+      state.conversationList = [];
+      state.isLoadingConversations = false;
+      writeLocalStorage(LAST_PROJECT_ID_KEY, nextProjectId);
     },
     setInputMessage(state, action: PayloadAction<string>) {
       state.inputMessage = action.payload;
     },
     bumpIframeRefresh(state) {
       state.iframeRefreshKey += 1;
+    },
+    setConversationList(state, action: PayloadAction<ConversationRoom[]>) {
+      state.conversationList = action.payload;
+    },
+    updateConversationRoomName(
+      state,
+      action: PayloadAction<{ roomId: string; roomName: string }>,
+    ) {
+      state.conversationList = state.conversationList.map((room) =>
+        room.roomId === action.payload.roomId
+          ? { ...room, roomName: action.payload.roomName }
+          : room,
+      );
+    },
+    setIsLoadingConversations(state, action: PayloadAction<boolean>) {
+      state.isLoadingConversations = action.payload;
+    },
+    setMessages(state, action: PayloadAction<ChatMessage[]>) {
+      state.messages = action.payload;
+      state.pendingMessageId = null;
     },
     addMessage: {
       reducer(
@@ -221,6 +286,9 @@ const chatSlice = createSlice({
     });
     builder.addCase(runAgentHarness.fulfilled, (state) => {
       state.pendingMessageId = null;
+      if (state.projectId && state.roomId) {
+        writeLastRoomId(state.projectId, state.roomId);
+      }
     });
     builder.addCase(runAgentHarness.rejected, (state) => {
       if (state.pendingMessageId) {
@@ -244,7 +312,10 @@ const chatSlice = createSlice({
       state.messages = [];
       state.pendingMessageId = null;
       state.inputMessage = "";
+      state.conversationList = [];
+      state.isLoadingConversations = false;
       writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload.projectId);
+      writeLastRoomId(action.payload.projectId, state.roomId);
     });
     builder.addCase(createReactProject.fulfilled, (state, action) => {
       state.projectId = action.payload.projectId;
@@ -253,7 +324,10 @@ const chatSlice = createSlice({
       state.messages = [];
       state.pendingMessageId = null;
       state.inputMessage = "";
+      state.conversationList = [];
+      state.isLoadingConversations = false;
       writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload.projectId);
+      writeLastRoomId(action.payload.projectId, state.roomId);
     });
   },
 });
@@ -270,6 +344,10 @@ export const {
   setActiveProject,
   setInputMessage,
   bumpIframeRefresh,
+  setConversationList,
+  updateConversationRoomName,
+  setIsLoadingConversations,
+  setMessages,
   addMessage,
 } = chatSlice.actions;
 export { createRoomId };

@@ -5,6 +5,7 @@ import createProjectReducer from "./slices/createProjectSlice";
 import myProjectsReducer from "./slices/myProjects";
 import skillsReducer from "./slices/skillsSlice";
 import transcriptReducer from "./slices/transcriptSlice";
+import issuesReducer from "./slices/issuesSlice";
 
 export const store = configureStore({
 	reducer: {
@@ -14,6 +15,7 @@ export const store = configureStore({
 		myProjects: myProjectsReducer,
 		skills: skillsReducer,
 		transcript: transcriptReducer,
+		issues: issuesReducer,
 	},
 });
 

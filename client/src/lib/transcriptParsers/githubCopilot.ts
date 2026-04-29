@@ -5,10 +5,15 @@ import {
     extractToolDescription,
     parseAggregateAssistantEvent,
     parseSingleEvent,
+    readBoolean,
     readEventId,
     readString,
     unwrapEnvelope,
 } from "./shared";
+
+const isSyntheticSkillContextPrompt = (event: TranscriptEvent | null) =>
+    event?.kind === "user-prompt" &&
+    /^\s*<skill-context\b/i.test(event.text);
 
 const parseAssistantMessageEvent = (
     msg: Record<string, unknown>,
@@ -18,6 +23,17 @@ const parseAssistantMessageEvent = (
         readString(message.messageId) ?? readEventId(message);
     const timestamp = readString(msg.timestamp ?? message.timestamp, "") ?? "";
     const interactionId = readString(message.interactionId);
+    const assistantEventId = interactionId ?? messageId;
+    const messageStatus = readString(message.status ?? message.state, "")
+        ?.toLowerCase()
+        .trim();
+    const isPartial =
+        readBoolean(message.isPartial) ??
+        (messageStatus
+            ? !["complete", "completed", "done", "success"].includes(
+                  messageStatus,
+              )
+            : undefined);
     const toolRequests = Array.isArray(message.toolRequests)
         ? message.toolRequests
         : [];
@@ -41,12 +57,13 @@ const parseAssistantMessageEvent = (
                     kind: "assistant-text",
                     eventId:
                         readEventId(request) ??
-                        (messageId
-                            ? `${messageId}:intent:${index}`
+                        (assistantEventId
+                            ? `${assistantEventId}:intent:${index}`
                             : undefined),
                     text: intent,
                     display: "intent",
                     model: message.model,
+                    isPartial,
                     timestamp,
                 },
                 "github_copilot_py",
@@ -86,9 +103,10 @@ const parseAssistantMessageEvent = (
         const parsedMessage = parseSingleEvent(
             {
                 kind: "assistant-text",
-                eventId: messageId ?? interactionId,
+                eventId: assistantEventId,
                 text: message.content,
                 model: message.model,
+                isPartial,
                 timestamp,
             },
             "github_copilot_py",
@@ -203,5 +221,8 @@ export const parseGitHubCopilotTranscriptMessage = (
     }
 
     const event = parseSingleEvent(msg, "github_copilot_py");
+    if (isSyntheticSkillContextPrompt(event)) {
+        return [];
+    }
     return event ? [event] : [];
 };

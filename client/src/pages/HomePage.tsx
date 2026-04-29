@@ -11,29 +11,33 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useAppContext } from "@/contexts";
+import { attachPreviewIssues } from "@/lib/previewIssues";
 import { cn } from "@/lib/utils";
 import { Env } from "@semoss/sdk";
 import { useAppDispatch, useAppSelector } from "@/store";
-import { bumpIframeRefresh, setActiveProject } from "@/store/slices/chatSlice";
+import {
+  bumpIframeRefresh,
+  readLastRoomId,
+  setActiveProject,
+} from "@/store/slices/chatSlice";
 import { createReactProject } from "@/store/slices/createProjectSlice";
+import {
+  capturePreviewIssue,
+  setPreviewIssueCapability,
+} from "@/store/slices/issuesSlice";
 import { hydrateDefaultMcps } from "@/store/slices/mcpSlice";
 import { queryMyProjects } from "@/store/slices/myProjects";
+import { resumeConversation } from "@/store/thunks/conversationHistory";
 import {
-  ChevronDown,
+  Copy,
   FolderOpen,
   Hammer,
+  Info,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -46,6 +50,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { toast } from "sonner";
 
 type ProjectSummary = {
   project_id?: string;
@@ -59,6 +64,7 @@ type ProjectSummary = {
 };
 
 const PROJECT_ID_STORAGE_KEY = "semoss.activeProjectId";
+const PROJECTS_PAGE_SIZE = 20;
 
 const readStoredProjectId = () => {
   if (typeof window === "undefined") {
@@ -146,6 +152,13 @@ const formatProjectDate = (value?: string) => {
   });
 };
 
+const buildProjectBrowsePixel = (filterWord: string, offset: number) => {
+  const trimmed = filterWord.trim();
+  const encodedFilter = trimmed ? `<encode>${trimmed}</encode>` : "";
+
+  return `MyProjects ( metaKeys = [ "tag" , "domain" , "data classification" , "data restrictions" , "description" ] , metaFilters = [ { 'tag': 'CLAUDE'} ] , filterWord = [ "${encodedFilter}" ] , onlyPortals = [ true ] , limit = [ ${PROJECTS_PAGE_SIZE} ] , offset = [ ${offset} ] ) ;`;
+};
+
 /**
  * Renders the home page, currently displaying an example component.
  *
@@ -163,10 +176,16 @@ export const HomePage = () => {
   const iframeRefreshKey = useAppSelector(
     (state) => state.chat.iframeRefreshKey,
   );
+  const previewSessionId = useAppSelector((state) => state.issues.previewSessionId);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [isLoadProjectOpen, setIsLoadProjectOpen] = useState(false);
+  const [projectSearchQuery, setProjectSearchQuery] = useState("");
+  const [projectSearchResults, setProjectSearchResults] = useState<ProjectSummary[]>([]);
+  const [projectSearchOffset, setProjectSearchOffset] = useState(0);
+  const [projectSearchHasMore, setProjectSearchHasMore] = useState(true);
+  const [isProjectSearchLoading, setIsProjectSearchLoading] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [isBuilding, setIsBuilding] = useState(false);
@@ -176,9 +195,14 @@ export const HomePage = () => {
     (projectId ? "Untitled project" : "");
   const storedProjectIdRef = useRef<string | null>(null);
   const didCheckStoredProjectRef = useRef(false);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const previewCleanupRef = useRef<(() => void) | null>(null);
+  const projectResultsRef = useRef<HTMLDivElement | null>(null);
+  const projectSearchRequestIdRef = useRef(0);
 
   const trimmedProjectName = newProjectName.trim();
   const isCreateDisabled = trimmedProjectName.length === 0 || isCreatingProject;
+  const trimmedProjectSearchQuery = projectSearchQuery.trim();
 
   const iframeSrc = buildIframeSrc(projectId, Env.MODULE);
 
@@ -207,10 +231,25 @@ export const HomePage = () => {
     const storedProjectId = readStoredProjectId().trim();
     storedProjectIdRef.current = storedProjectId || null;
 
-    if (storedProjectId && storedProjectId !== projectId) {
+    if (!storedProjectId) {
+      return;
+    }
+
+    if (storedProjectId !== projectId) {
       dispatch(setActiveProject(storedProjectId));
     }
-  }, [dispatch, projectId]);
+
+    const lastRoomId = readLastRoomId(storedProjectId);
+    if (lastRoomId) {
+      void dispatch(
+        resumeConversation({
+          roomId: lastRoomId,
+          projectId: storedProjectId,
+          runPixel,
+        }),
+      );
+    }
+  }, [dispatch, projectId, runPixel]);
 
   useEffect(() => {
     if (!projectsLoaded) {
@@ -229,7 +268,13 @@ export const HomePage = () => {
     }
 
     dispatch(setActiveProject(firstProjectId));
-  }, [dispatch, myProjects, projectId, projectsLoaded]);
+    const lastRoomId = readLastRoomId(firstProjectId);
+    if (lastRoomId) {
+      void dispatch(
+        resumeConversation({ roomId: lastRoomId, projectId: firstProjectId, runPixel }),
+      );
+    }
+  }, [dispatch, myProjects, projectId, projectsLoaded, runPixel]);
 
   useEffect(() => {
     const normalizedProjectId = projectId.trim();
@@ -239,6 +284,13 @@ export const HomePage = () => {
 
     writeStoredProjectId(normalizedProjectId);
   }, [projectId]);
+
+  useEffect(() => {
+    return () => {
+      previewCleanupRef.current?.();
+      previewCleanupRef.current = null;
+    };
+  }, []);
 
   const handleBuildAndPublish = useCallback(async () => {
     if (!projectId || isBuilding) return;
@@ -308,10 +360,30 @@ export const HomePage = () => {
         `${`PullProjectFolderFromCloud(project='${nextProjectId}')`}`,
       );
       dispatch(setActiveProject(nextProjectId));
+      const lastRoomId = readLastRoomId(nextProjectId);
+      if (lastRoomId) {
+        void dispatch(
+          resumeConversation({ roomId: lastRoomId, projectId: nextProjectId, runPixel }),
+        );
+      }
       setIsLoadProjectOpen(false);
     },
-    [dispatch],
+    [dispatch, runPixel],
   );
+
+  const handleCopyTechnicalDetail = useCallback(async (label: string, value: string) => {
+    if (!value) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success(`${label} copied`);
+    } catch (error) {
+      console.error(`Failed to copy ${label}:`, error);
+      toast.error(`Failed to copy ${label.toLowerCase()}.`);
+    }
+  }, []);
 
   const showCreateProjectMessage =
     projectsLoaded && !projectId && myProjects.length === 0;
@@ -324,10 +396,132 @@ export const HomePage = () => {
       ? "Selecting your first project..."
       : "Loading your projects...";
 
+  const loadProjectsPage = useCallback(
+    async ({ query, offset, append }: { query: string; offset: number; append: boolean }) => {
+      const requestId = projectSearchRequestIdRef.current + 1;
+      projectSearchRequestIdRef.current = requestId;
+      setIsProjectSearchLoading(true);
+
+      try {
+        const response = await runPixel<ProjectSummary[]>(
+          buildProjectBrowsePixel(query, offset),
+        );
+
+        if (projectSearchRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        const projects = response ?? [];
+        setProjectSearchResults((current) =>
+          append ? [...current, ...projects] : projects,
+        );
+        setProjectSearchOffset(offset + projects.length);
+        setProjectSearchHasMore(projects.length === PROJECTS_PAGE_SIZE);
+      } catch (error) {
+        if (projectSearchRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        console.error("Failed to load projects:", error);
+        toast.error("Could not load projects right now.");
+        setProjectSearchResults((current) => (append ? current : []));
+        setProjectSearchOffset(offset);
+        setProjectSearchHasMore(false);
+      } finally {
+        if (projectSearchRequestIdRef.current === requestId) {
+          setIsProjectSearchLoading(false);
+        }
+      }
+    },
+    [runPixel],
+  );
+
+  const resetProjectSearch = useCallback(() => {
+    projectSearchRequestIdRef.current += 1;
+    setProjectSearchQuery("");
+    setProjectSearchResults([]);
+    setProjectSearchOffset(0);
+    setProjectSearchHasMore(true);
+    setIsProjectSearchLoading(false);
+  }, []);
+
+  const handleProjectResultsScroll = useCallback(() => {
+    const container = projectResultsRef.current;
+    if (!container || isProjectSearchLoading || !projectSearchHasMore) {
+      return;
+    }
+
+    const remaining = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (remaining > 80) {
+      return;
+    }
+
+    void loadProjectsPage({
+      query: trimmedProjectSearchQuery,
+      offset: projectSearchOffset,
+      append: true,
+    });
+  }, [
+    isProjectSearchLoading,
+    loadProjectsPage,
+    projectSearchHasMore,
+    projectSearchOffset,
+    trimmedProjectSearchQuery,
+  ]);
+
+  useEffect(() => {
+    if (!isLoadProjectOpen) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void loadProjectsPage({
+        query: trimmedProjectSearchQuery,
+        offset: 0,
+        append: false,
+      });
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isLoadProjectOpen, loadProjectsPage, trimmedProjectSearchQuery]);
+
+  const handlePreviewLoad = useCallback(() => {
+    previewCleanupRef.current?.();
+    previewCleanupRef.current = null;
+
+    if (!iframeRef.current || !projectId) {
+      dispatch(
+        setPreviewIssueCapability({
+          status: "idle",
+          message: "Open and test the preview to capture issues.",
+        }),
+      );
+      return;
+    }
+
+    previewCleanupRef.current = attachPreviewIssues(iframeRef.current, {
+      onSignal: (transport) => {
+        dispatch(
+          capturePreviewIssue({
+            transport,
+            context: {
+              projectId,
+              roomId,
+              previewSessionId,
+            },
+          }),
+        );
+      },
+      onCapabilityChange: (capability) => {
+        dispatch(setPreviewIssueCapability(capability));
+      },
+    });
+  }, [dispatch, previewSessionId, projectId, roomId]);
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 lg:flex-row">
-      <section className="flex min-h-[28rem] flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/50 dark:border-white/10 bg-white/70 dark:bg-zinc-900/60 shadow-xl shadow-slate-400/10 dark:shadow-black/20 backdrop-blur-xl">
-        <div className="flex items-center gap-2 border-b border-slate-200/50 dark:border-white/10 bg-slate-50/80 dark:bg-zinc-800/60 px-3 py-1.5">
+      <section className="flex min-h-[28rem] flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/50 dark:border-white/10 bg-white/70 shadow-xl shadow-slate-400/10 backdrop-blur-xl dark:bg-zinc-900/60 dark:shadow-black/20">
+        <div className="flex items-center gap-2 border-b border-slate-200/50 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-zinc-800/60">
           <button
             type="button"
             onClick={() => dispatch(bumpIframeRefresh())}
@@ -347,78 +541,94 @@ export const HomePage = () => {
               className={cn("h-3.5 w-3.5", isBuilding && "animate-pulse")}
             />
           </button>
-          <TooltipProvider delayDuration={100}>
-            {roomId && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="shrink-0 truncate max-w-[6rem] rounded-md bg-slate-200/70 dark:bg-zinc-700/50 px-2 py-0.5 text-[10px] font-medium text-muted-foreground cursor-default">
-                    Room: {roomId}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent
-                  side="bottom"
-                  className="max-w-xs break-all rounded-lg bg-popover px-3 py-2 text-xs text-popover-foreground shadow-lg border border-slate-200/50 dark:border-white/10"
-                >
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">
-                    Room ID
-                  </p>
-                  <p className="font-mono text-xs">{roomId}</p>
-                </TooltipContent>
-              </Tooltip>
-            )}
-            {projectId && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="shrink-0 truncate max-w-[6rem] rounded-md bg-slate-200/70 dark:bg-zinc-700/50 px-2 py-0.5 text-[10px] font-medium text-muted-foreground cursor-default">
-                    Project: {projectId}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent
-                  side="bottom"
-                  className="max-w-xs break-all rounded-lg bg-popover px-3 py-2 text-xs text-popover-foreground shadow-lg border border-slate-200/50 dark:border-white/10"
-                >
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">
-                    Project ID
-                  </p>
-                  <p className="font-mono text-xs">{projectId}</p>
-                </TooltipContent>
-              </Tooltip>
-            )}
-          </TooltipProvider>
-          <div className="mx-auto flex h-6 w-full max-w-md items-center rounded-md bg-slate-200/60 dark:bg-zinc-700/50 px-3">
-            <span className="truncate text-xs text-muted-foreground">/</span>
-          </div>
-          {activeProjectName && (
-            <span className="shrink-0 truncate max-w-[12rem] rounded-md bg-slate-200/70 dark:bg-zinc-700/50 px-2 py-0.5 text-xs text-muted-foreground">
-              {activeProjectName}
-            </span>
-          )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
+          <div className="ml-1 flex min-w-0 flex-1 items-center justify-between gap-4 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 dark:border-white/10 dark:bg-zinc-900/40">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground/80">
+                Current Project
+              </span>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate text-sm font-semibold text-foreground">
+                  {activeProjectName || "No project selected"}
+                </span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-slate-200/60 hover:text-foreground dark:hover:bg-zinc-700/60"
+                      title="Technical details"
+                    >
+                      <Info className="h-3.5 w-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="start"
+                    className="w-[30rem] max-w-[calc(100vw-2rem)] space-y-2 p-3"
+                  >
+                    <div className="rounded-md border border-slate-200/60 bg-slate-50/70 p-2 dark:border-white/10 dark:bg-zinc-900/40">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        Room ID
+                      </p>
+                      <p className="mt-1 text-[11px] font-mono leading-relaxed text-foreground">
+                        {roomId || "Unavailable"}
+                      </p>
+                      <button
+                        type="button"
+                        className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                        onClick={() => handleCopyTechnicalDetail("Room ID", roomId)}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        Copy
+                      </button>
+                    </div>
+                    <div className="rounded-md border border-slate-200/60 bg-slate-50/70 p-2 dark:border-white/10 dark:bg-zinc-900/40">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        Project ID
+                      </p>
+                      <p className="mt-1 text-[11px] font-mono leading-relaxed text-foreground">
+                        {projectId || "Unavailable"}
+                      </p>
+                      <button
+                        type="button"
+                        className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                        onClick={() =>
+                          handleCopyTechnicalDetail("Project ID", projectId)
+                        }
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        Copy
+                      </button>
+                    </div>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
                 type="button"
-                className="flex items-center gap-1 rounded-md p-1 text-muted-foreground hover:bg-slate-200/60 dark:hover:bg-zinc-700/60 hover:text-foreground transition-colors"
-                title="Project actions"
+                variant="outline"
+                size="sm"
+                className="h-8 rounded-lg bg-white/90 px-3 text-xs font-medium shadow-sm dark:bg-zinc-800/70"
+                onClick={() => setIsCreateProjectOpen(true)}
               >
-                <FolderOpen className="h-3.5 w-3.5" />
-                <ChevronDown className="h-3 w-3 opacity-50" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-40">
-              <DropdownMenuItem onClick={() => setIsCreateProjectOpen(true)}>
-                <Plus className="mr-2 h-3.5 w-3.5" />
-                New Project
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setIsLoadProjectOpen(true)}>
-                <FolderOpen className="mr-2 h-3.5 w-3.5" />
-                Load Project
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                New project
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 rounded-lg bg-white/90 px-3 text-xs font-medium shadow-sm dark:bg-zinc-800/70"
+                onClick={() => setIsLoadProjectOpen(true)}
+              >
+                <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+                Open project
+              </Button>
+            </div>
+          </div>
           <button
             type="button"
             onClick={() => setChatCollapsed((v) => !v)}
-            className="rounded-md p-1 text-muted-foreground hover:bg-slate-200/60 dark:hover:bg-zinc-700/60 hover:text-foreground transition-colors"
+            className="ml-auto shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-slate-200/60 hover:text-foreground dark:hover:bg-zinc-700/60"
             title={chatCollapsed ? "Show chat" : "Hide chat"}
           >
             {chatCollapsed ? (
@@ -430,17 +640,19 @@ export const HomePage = () => {
         </div>
         {projectId ? (
           <iframe
+            ref={iframeRef}
             title="Semoss App"
             src={iframeSrc}
             className="h-full w-full"
             key={iframeRefreshKey}
+            onLoad={handlePreviewLoad}
           />
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center">
             <p className="text-sm text-muted-foreground">{emptyStateMessage}</p>
             {showCreateProjectMessage ? (
               <p className="text-xs text-muted-foreground">
-                Use the Create button to spin up your first workspace.
+                Use New project to create your first workspace, or Open project to switch to an existing one.
               </p>
             ) : null}
             {showLoadingMessage ? (
@@ -466,19 +678,28 @@ export const HomePage = () => {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create Project</DialogTitle>
+            <DialogTitle>Create New Project</DialogTitle>
             <DialogDescription>
-              Enter a project name to start a fresh workspace.
+              Start a fresh workspace with a clear project name.
             </DialogDescription>
           </DialogHeader>
-          <form className="space-y-4" onSubmit={handleCreateProjectSubmit}>
+          <form
+            className="space-y-4"
+            onSubmit={handleCreateProjectSubmit}
+            autoComplete="off"
+          >
             <div className="space-y-2">
               <Label htmlFor="new-project-name">Project Name</Label>
               <Input
                 id="new-project-name"
+                name="agent47-project-name"
                 placeholder="New project"
                 value={newProjectName}
                 onChange={(event) => setNewProjectName(event.target.value)}
+                autoComplete="off"
+                data-1p-ignore="true"
+                data-lpignore="true"
+                spellCheck={false}
                 autoFocus
               />
             </div>
@@ -492,7 +713,7 @@ export const HomePage = () => {
                 Cancel
               </Button>
               <Button type="submit" disabled={isCreateDisabled}>
-                {isCreatingProject ? "Creating..." : "Create Project"}
+                {isCreatingProject ? "Creating..." : "Create project"}
               </Button>
             </DialogFooter>
           </form>
@@ -500,22 +721,62 @@ export const HomePage = () => {
       </Dialog>
 
       {/* Load Project Dialog */}
-      <Dialog open={isLoadProjectOpen} onOpenChange={setIsLoadProjectOpen}>
+      <Dialog
+        open={isLoadProjectOpen}
+        onOpenChange={(nextOpen) => {
+          setIsLoadProjectOpen(nextOpen);
+          if (!nextOpen) {
+            resetProjectSearch();
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Load Project</DialogTitle>
+            <DialogTitle>Open Project</DialogTitle>
             <DialogDescription>
-              Select a project to switch your active workspace.
+              Choose an existing project to bring into the active workspace.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            {myProjects.length === 0 ? (
+            <div className="space-y-2">
+              <Label htmlFor="project-search">Search projects</Label>
+              <Input
+                id="project-search"
+                name="agent47-project-search"
+                placeholder="Search by project name or ID"
+                value={projectSearchQuery}
+                onChange={(event) => setProjectSearchQuery(event.target.value)}
+                autoComplete="off"
+                data-1p-ignore="true"
+                data-lpignore="true"
+                spellCheck={false}
+                autoFocus
+              />
+            </div>
+            {isProjectSearchLoading && projectSearchResults.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border/60 px-4 py-8 text-center">
+                <p className="text-sm text-muted-foreground">Loading projects...</p>
+              </div>
+            ) : myProjects.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No saved projects found yet.
               </p>
+            ) : projectSearchResults.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border/60 px-4 py-8 text-center">
+                <p className="text-sm font-medium text-foreground">
+                  No matching projects
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Try a different project name or paste part of the project ID.
+                </p>
+              </div>
             ) : (
-              <div className="max-h-72 overflow-y-auto rounded-lg border border-border/60">
-                {myProjects.map((project, index) => {
+              <div
+                ref={projectResultsRef}
+                onScroll={handleProjectResultsScroll}
+                className="max-h-72 overflow-y-auto rounded-lg border border-border/60"
+              >
+                {projectSearchResults.map((project, index) => {
                   const nextProjectId = getProjectId(project);
                   const isActive = nextProjectId === projectId;
                   const projectKey =
@@ -543,6 +804,11 @@ export const HomePage = () => {
                     </button>
                   );
                 })}
+                {isProjectSearchLoading ? (
+                  <div className="border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
+                    Loading more projects...
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

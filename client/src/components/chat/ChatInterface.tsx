@@ -1,6 +1,9 @@
 import {
   ArrowUp,
   BookOpen,
+  ChevronDown,
+  ChevronUp,
+  Copy,
   Plus,
   Search,
   Settings,
@@ -20,9 +23,12 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { ConversationHistoryPanel } from "@/components/chat/ConversationHistoryPanel";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
+import { IssuesPanel } from "@/components/chat/IssuesPanel";
 import { ConfirmationDialog } from "@/components/library/ConfirmationDialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -52,9 +58,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAppContext } from "@/contexts/AppContext";
 import { cn } from "@/lib/utils";
+import { buildIssuesRepairPrompt } from "@/lib/previewIssues";
 import { useAppDispatch, useAppSelector } from "@/store";
 import {
-  addMessage,
   type ChatMessage,
   type HarnessType,
   type PermissionMode,
@@ -75,14 +81,18 @@ import {
   setMcpSearch,
 } from "@/store/slices/mcpSlice";
 import {
+  markAllIssuesSeen,
+  markIssuesSent,
+  selectIssues,
+  selectUnseenIssuesCount,
+} from "@/store/slices/issuesSlice";
+import {
   createSkill,
   deleteSkill,
   querySkills,
   updateSkill,
 } from "@/store/slices/skillsSlice";
-import {
-  runAgentHarness,
-} from "@/store/thunks/runAgentHarness";
+import { submitAgentMessage } from "@/store/thunks/submitAgentMessage";
 import { getTranscriptEventStableKey } from "@/types/transcript";
 
 type SkillTab = {
@@ -202,10 +212,16 @@ export const ChatInterface = () => {
   } = useAppSelector((state) => state.mcp);
   const { skills, claudeMd } = useAppSelector((state) => state.skills);
   const transcriptEvents = useAppSelector((state) => state.transcript.events);
+  const issueRecords = useAppSelector(selectIssues);
+  const unseenIssuesCount = useAppSelector(selectUnseenIssuesCount);
 
   const [isConfigurationOpen, setIsConfigurationOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isSkillsOpen, setIsSkillsOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"build" | "issues" | "settings">(
+    "build",
+  );
+  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isLoadingSkills, setIsLoadingSkills] = useState(false);
   const [skillsError, setSkillsError] = useState<string | null>(null);
   const [activeSkillTabId, setActiveSkillTabId] = useState<string>("");
@@ -250,19 +266,20 @@ export const ChatInterface = () => {
     [pinnedMcps],
   );
 
-  // Merge chat messages and transcript events into a single chronological
-  // timeline so each user prompt is followed by its own turn's assistant
-  // events (rather than all messages appearing above all transcript events).
+  // Merge non-user legacy chat messages (for example system errors) with
+  // transcript events. User prompts already arrive through the transcript
+  // stream/history for both harnesses, so rendering chat-state user messages
+  // here would duplicate the same bubble.
   type TimelineItem =
     | {
         source: "message";
-        createdAt: number;
+        createdAt: number | null;
         key: string;
         message: ChatMessage;
       }
     | {
         source: "transcript";
-        createdAt: number;
+        createdAt: number | null;
         key: string;
         event: (typeof transcriptEvents)[number];
       };
@@ -270,6 +287,9 @@ export const ChatInterface = () => {
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [];
     for (const message of messages) {
+      if (message.role === "user") {
+        continue;
+      }
       items.push({
         source: "message",
         createdAt: message.createdAt ?? 0,
@@ -282,7 +302,7 @@ export const ChatInterface = () => {
       const stableKey = getTranscriptEventStableKey(event);
       items.push({
         source: "transcript",
-        createdAt: Number.isFinite(parsed) ? parsed : 0,
+        createdAt: Number.isFinite(parsed) ? parsed : null,
         key: stableKey ?? `transcript-${event.kind}-${index}`,
         event,
       });
@@ -291,9 +311,17 @@ export const ChatInterface = () => {
     return items
       .map((item, index) => ({ item, index }))
       .sort((a, b) => {
-        if (a.item.createdAt !== b.item.createdAt) {
-          return a.item.createdAt - b.item.createdAt;
+        const aHasTime = a.item.createdAt !== null;
+        const bHasTime = b.item.createdAt !== null;
+
+        if (aHasTime && bHasTime && a.item.createdAt !== b.item.createdAt) {
+          return (a.item.createdAt ?? 0) - (b.item.createdAt ?? 0);
         }
+
+        if (aHasTime !== bHasTime) {
+          return aHasTime ? -1 : 1;
+        }
+
         return a.index - b.index;
       })
       .map(({ item }) => item);
@@ -304,10 +332,8 @@ export const ChatInterface = () => {
       return;
     }
 
-    dispatch(addMessage({ role: "user", content: trimmedMessage }));
-
     dispatch(
-      runAgentHarness({
+      submitAgentMessage({
         message: trimmedMessage,
         runPixel,
         runPixelAsync,
@@ -315,7 +341,6 @@ export const ChatInterface = () => {
         getPixelJobStreaming,
       }),
     );
-    dispatch(setInputMessage(""));
   }, [
     dispatch,
     runPixel,
@@ -392,6 +417,59 @@ export const ChatInterface = () => {
     },
     [dispatch],
   );
+
+  const handleCopyTechnicalDetail = useCallback(async (label: string, value: string) => {
+    if (!value) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success(`${label} copied`);
+    } catch (error) {
+      console.error(`Failed to copy ${label}:`, error);
+      toast.error(`Failed to copy ${label.toLowerCase()}.`);
+    }
+  }, []);
+
+  const handleAskToFixIssues = useCallback(
+    (issueIds: string[]) => {
+      const selectedRecords = issueIds
+        .map((id) => issueRecords.find((record) => record.id === id))
+        .filter(Boolean) as typeof issueRecords;
+
+      if (selectedRecords.length === 0) {
+        return;
+      }
+
+      dispatch(markIssuesSent({ ids: issueIds, roomId }));
+      setActiveTab("build");
+      dispatch(
+        submitAgentMessage({
+          message: buildIssuesRepairPrompt(selectedRecords),
+          runPixel,
+          runPixelAsync,
+          getPixelAsyncResult,
+          getPixelJobStreaming,
+        }),
+      );
+    },
+    [
+      dispatch,
+      getPixelAsyncResult,
+      getPixelJobStreaming,
+      issueRecords,
+      roomId,
+      runPixel,
+      runPixelAsync,
+    ],
+  );
+
+  useEffect(() => {
+    if (activeTab === "issues") {
+      dispatch(markAllIssuesSeen());
+    }
+  }, [activeTab, dispatch]);
 
   useEffect(() => {
     if (!projectId) {
@@ -870,37 +948,51 @@ export const ChatInterface = () => {
           style={{ animationDelay: "1.25s" }}
         />
 
-        <Tabs defaultValue="chat" className="relative flex h-full flex-col">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) =>
+            setActiveTab(value as "build" | "issues" | "settings")
+          }
+          className="relative flex h-full flex-col"
+        >
           <header className="flex flex-col gap-2 rounded-t-xl border border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-slate-50/60 via-white/40 to-sky-50/30 px-4 py-3">
             <div className="flex flex-col items-center text-center">
               <p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
-                Agent Chat
+                Build Your App
               </p>
             </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-2 rounded-full border border-emerald-200/60 bg-emerald-50/80 dark:bg-emerald-900/30 dark:border-emerald-700/40 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                  <span className="h-2 w-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
-                  Agent Online
-                </div>
-                <TabsList>
-                  <TabsTrigger value="chat">Chat</TabsTrigger>
-                  <TabsTrigger value="settings">Settings</TabsTrigger>
-                </TabsList>
+            <div className="relative flex items-center justify-center">
+              <TabsList>
+                <TabsTrigger value="build">Build</TabsTrigger>
+                <TabsTrigger value="issues" className="gap-2">
+                  Issues
+                  {unseenIssuesCount > 0 ? (
+                    <Badge
+                      variant="destructive"
+                      className="rounded-full px-1.5 py-0 text-[10px]"
+                    >
+                      {unseenIssuesCount}
+                    </Badge>
+                  ) : null}
+                </TabsTrigger>
+                <TabsTrigger value="settings">Settings</TabsTrigger>
+              </TabsList>
+              <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1">
+                <ConversationHistoryPanel />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => dispatch(startNewRoom())}
+                  title="New Chat"
+                >
+                  <SquarePen className="h-4 w-4" />
+                </Button>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => dispatch(startNewRoom())}
-                title="New Chat"
-              >
-                <SquarePen className="h-4 w-4" />
-              </Button>
             </div>
           </header>
 
           <TabsContent
-            value="chat"
+            value="build"
             className="mt-0 flex flex-1 min-h-0 flex-col rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-white/80 dark:bg-zinc-900/60 backdrop-blur-xl shadow-lg shadow-slate-400/5"
           >
             <div
@@ -914,12 +1006,16 @@ export const ChatInterface = () => {
                   </div>
                   <div className="space-y-1">
                     <h3 className="text-lg font-semibold tracking-tight">
-                      Start a conversation
+                      Describe what you want to build
                     </h3>
                     <p className="text-sm text-muted-foreground">
-                      Describe what you want to build and the AI agent will help
-                      you create it.
+                      Share a workflow, paste requirements, or ask for changes
+                      in plain language.
                     </p>
+                    <div className="pt-2 text-xs text-muted-foreground">
+                      Examples: "Create an intake app for internal requests" or
+                      "Turn this spreadsheet into a dashboard."
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -967,6 +1063,10 @@ export const ChatInterface = () => {
             </footer>
           </TabsContent>
 
+          <TabsContent value="issues" className="mt-0 flex flex-1 min-h-0">
+            <IssuesPanel onAskToFix={handleAskToFixIssues} />
+          </TabsContent>
+
           <TabsContent
             value="settings"
             className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 p-4 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
@@ -974,13 +1074,16 @@ export const ChatInterface = () => {
             <div className="flex flex-col gap-5">
               <div className="space-y-2">
                 <p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
-                  Session
+                  Workspace
                 </p>
-                <h2 className="text-lg font-semibold">Room Settings</h2>
+                <h2 className="text-lg font-semibold">Workspace settings</h2>
+                <p className="text-sm text-muted-foreground">
+                  Choose your assistant, pick a model, and open advanced tools when you need them.
+                </p>
               </div>
 
               <div className="space-y-2">
-                <Label>Harness Type</Label>
+                <Label>Assistant</Label>
                 <div className="flex rounded-md border">
                   {HARNESS_TYPE_OPTIONS.map((option) => (
                     <button
@@ -988,7 +1091,10 @@ export const ChatInterface = () => {
                       type="button"
                       onClick={() => {
                         if (option.value === harnessType) return;
-                        if (messages.length > 0) {
+                        if (
+                          messages.length > 0 ||
+                          transcriptEvents.length > 0
+                        ) {
                           setPendingHarnessType(option.value);
                         } else {
                           dispatch(setHarnessType(option.value));
@@ -1009,7 +1115,7 @@ export const ChatInterface = () => {
               </div>
 
               <div className="space-y-2">
-                <Label>Engine</Label>
+                <Label>Model</Label>
                 <Popover
                   open={engineDropdownOpen}
                   onOpenChange={(open) => {
@@ -1026,7 +1132,7 @@ export const ChatInterface = () => {
                         {engineDisplayName ||
                           (engineId
                             ? `${engineId.slice(0, 18)}...`
-                            : "Select engine")}
+                            : "Select model")}
                       </span>
                       <Search className="ml-2 h-4 w-4 shrink-0 text-muted-foreground" />
                     </Button>
@@ -1078,6 +1184,28 @@ export const ChatInterface = () => {
                 </Popover>
               </div>
 
+              <div className="rounded-xl border border-slate-200/60 bg-white/70 p-4 dark:border-white/10 dark:bg-zinc-900/30">
+                <button
+                  type="button"
+                  onClick={() => setIsAdvancedOpen((value) => !value)}
+                  className="flex w-full items-center justify-between gap-3 text-left"
+                >
+                  <div>
+                    <p className="text-sm font-semibold">Advanced</p>
+                    <p className="text-xs text-muted-foreground">
+                      Technical controls, workspace tools, and copyable IDs.
+                    </p>
+                  </div>
+                  {isAdvancedOpen ? (
+                    <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </button>
+              </div>
+
+              {isAdvancedOpen ? (
+                <>
               <div className="space-y-2">
                 <Label htmlFor="system-prompt">System Prompt</Label>
                 <Textarea
@@ -1606,6 +1734,62 @@ export const ChatInterface = () => {
                   </DialogContent>
                 </Dialog>
               </div>
+              <div className="space-y-3 rounded-xl border border-slate-200/60 bg-white/70 p-4 dark:border-white/10 dark:bg-zinc-900/30">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold">Technical details</p>
+                  <p className="text-xs text-muted-foreground">
+                    Internal workspace values are available here when you need them.
+                  </p>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg border border-slate-200/60 bg-slate-50/70 p-3 dark:border-white/10 dark:bg-zinc-900/40">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Room ID
+                    </p>
+                    <p className="mt-1 break-all font-mono text-xs">
+                      {roomId || "Unavailable"}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="mt-2 gap-2 px-0"
+                      disabled={!roomId}
+                      onClick={() =>
+                        handleCopyTechnicalDetail("Room ID", roomId)
+                      }
+                    >
+                      <Copy className="h-4 w-4" />
+                      Copy
+                    </Button>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200/60 bg-slate-50/70 p-3 dark:border-white/10 dark:bg-zinc-900/40">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Project ID
+                    </p>
+                    <p className="mt-1 break-all font-mono text-xs">
+                      {projectId || "Unavailable"}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="mt-2 gap-2 px-0"
+                      disabled={!projectId}
+                      onClick={() =>
+                        handleCopyTechnicalDetail("Project ID", projectId)
+                      }
+                    >
+                      <Copy className="h-4 w-4" />
+                      Copy
+                    </Button>
+                  </div>
+                </div>
+              </div>
+                </>
+              ) : null}
             </div>
           </TabsContent>
         </Tabs>
@@ -1613,8 +1797,8 @@ export const ChatInterface = () => {
 
       <ConfirmationDialog
         open={pendingHarnessType !== null}
-        title="Switch Harness Type?"
-        text="Switching the harness type will create a new chat. Your current conversation will be lost. Do you want to continue?"
+        title="Switch assistant?"
+        text="Switching the assistant will create a new chat. Your current conversation will be lost. Do you want to continue?"
         buttons={
           <>
             <Button

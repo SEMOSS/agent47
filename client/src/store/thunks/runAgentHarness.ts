@@ -4,6 +4,7 @@ import type { StreamingResponse } from "@/contexts/AppContext";
 import {
   selectEffectiveSystemPrompt,
   type ChatState,
+  updateConversationRoomName,
 } from "../slices/chatSlice";
 import type { MCPState } from "../slices/mcpSlice";
 import { addTranscriptEvent } from "../slices/transcriptSlice";
@@ -40,12 +41,17 @@ const createUpdateRoomOptionsPixel = (
   instructions: string,
   mcps: MCPDetails[],
   model: string,
+  harnessType: ChatState["harnessType"],
+  targetProjectId?: string,
 ) => {
   const safeInstructions = sanitizePixelArg(instructions);
   const mcpStrings = mcps.map(
     (mcp) => `{'id':'${mcp.id}','name':'${mcp.name}','type':'${mcp.type}'}`,
   );
-  return `UpdateRoomOptions(roomId='${roomId}', roomOptions=[{"instructions":'${safeInstructions}', "modelId":'${model}', "mcp":[${mcpStrings.join(",")}] }] )`;
+  const targetProjectPart = targetProjectId
+    ? `, "targetProjectId":'${sanitizePixelArg(targetProjectId)}'`
+    : "";
+  return `UpdateRoomOptions(roomId='${roomId}', roomOptions=[{"instructions":'${safeInstructions}', "modelId":'${model}', "harnessType":'${harnessType}', "mcp":[${mcpStrings.join(",")}]${targetProjectPart} }] )`;
 };
 
 export const updateRoomOptions = createAsyncThunk<
@@ -62,14 +68,20 @@ export const updateRoomOptions = createAsyncThunk<
   "chat/updateRoomOptions",
   async (
     { roomId, instructions, mcps, model, runPixel },
-    { rejectWithValue },
+    { rejectWithValue, getState },
   ) => {
     try {
-      const safeInstructions = sanitizePixelArg(instructions);
-      const mcpStrings = mcps.map(
-        (mcp) => `{'id':'${mcp.id}','name':'${mcp.name}','type':'${mcp.type}'}`,
+      const {
+        chat: { harnessType, projectId },
+      } = getState();
+      const pixelString = createUpdateRoomOptionsPixel(
+        roomId,
+        instructions,
+        mcps,
+        model,
+        harnessType,
+        projectId || undefined,
       );
-      const pixelString = `UpdateRoomOptions(roomId='${roomId}', roomOptions=[{"instructions":'${safeInstructions}', "modelId":'${model}', "mcp":[${mcpStrings.join(",")}] }] )`;
       const response = await runPixel<boolean>(pixelString);
       return {
         response,
@@ -88,6 +100,7 @@ export const runAgentHarness = createAsyncThunk<
   { response: string },
   {
     message: string;
+    shouldGenerateRoomName?: boolean;
     runPixel: RunPixelFn;
     runPixelAsync: RunPixelAsyncFn;
     getPixelAsyncResult: GetPixelAsyncResultFn;
@@ -101,6 +114,7 @@ export const runAgentHarness = createAsyncThunk<
   async (
     {
       message,
+      shouldGenerateRoomName,
       runPixel,
       runPixelAsync,
       getPixelAsyncResult,
@@ -124,6 +138,8 @@ export const runAgentHarness = createAsyncThunk<
         selectEffectiveSystemPrompt({ chat }),
         selectedMcps,
         chat.engineId,
+        chat.harnessType,
+        targetProjectId || undefined,
       );
       await runPixel(updateRoomOptionsPixel);
 
@@ -189,6 +205,24 @@ export const runAgentHarness = createAsyncThunk<
         result.results.length > 1
           ? (result.results[1].output as string)
           : (result.results[0].output as string);
+
+      if (shouldGenerateRoomName) {
+        try {
+          const generatedRoomName = await runPixel<string>(
+            `GenerateRoomName(roomId='${chat.roomId}', prompt='<encode>${safeMessage}</encode>', engine='${chat.engineId}');`,
+          );
+          if (generatedRoomName?.trim()) {
+            dispatch(
+              updateConversationRoomName({
+                roomId: chat.roomId,
+                roomName: generatedRoomName.trim(),
+              }),
+            );
+          }
+        } catch (error) {
+          console.warn("GenerateRoomName failed:", error);
+        }
+      }
 
       // OLD DETERMINISTIC APP BUILDING AFTER LAST MESSAGE... DON'T DELETE FOR NOW..
       // const buildAndPublishPixel = `BuildAndPublishApp(project='${targetProjectId}')`;

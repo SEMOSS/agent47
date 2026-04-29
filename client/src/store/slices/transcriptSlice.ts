@@ -1,6 +1,7 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import {
     getTranscriptEventStableKey,
+    type AssistantText,
     type TranscriptEvent,
     type ToolInvocation,
     type ToolResult,
@@ -51,11 +52,79 @@ const mergeTranscriptEvent = (
 ): TranscriptEvent => {
     const timestamp = existing.timestamp || incoming.timestamp;
 
+    const collapseRepeatedAssistantText = (text: string): string => {
+        const trimmed = text.trim();
+        if (!trimmed) {
+            return text;
+        }
+
+        for (const separator of ["\n\n", "\n", " " as const, "" as const]) {
+            const contentLength = trimmed.length - separator.length;
+            if (contentLength <= 0 || contentLength % 2 !== 0) {
+                continue;
+            }
+
+            const segmentLength = contentLength / 2;
+            const first = trimmed.slice(0, segmentLength).trimEnd();
+            const second = trimmed
+                .slice(segmentLength + separator.length)
+                .trimStart();
+
+            if (first && first === second) {
+                return first;
+            }
+        }
+
+        return text;
+    };
+
+    const mergeAssistantText = (
+        existingEvent: AssistantText,
+        incomingEvent: AssistantText,
+    ): string => {
+        const existingText = existingEvent.text ?? "";
+        const incomingText = incomingEvent.text ?? "";
+
+        if (!existingText) {
+            return collapseRepeatedAssistantText(incomingText);
+        }
+
+        if (!incomingText) {
+            return collapseRepeatedAssistantText(existingText);
+        }
+
+        if (incomingText === existingText) {
+            return collapseRepeatedAssistantText(incomingText);
+        }
+
+        if (incomingText.startsWith(existingText)) {
+            return collapseRepeatedAssistantText(incomingText);
+        }
+
+        if (existingText.startsWith(incomingText) && incomingEvent.isPartial) {
+            return collapseRepeatedAssistantText(existingText);
+        }
+
+        if (incomingEvent.isPartial) {
+            if (existingText.endsWith(incomingText)) {
+                return collapseRepeatedAssistantText(existingText);
+            }
+
+            return collapseRepeatedAssistantText(`${existingText}${incomingText}`);
+        }
+
+        return collapseRepeatedAssistantText(incomingText);
+    };
+
     switch (incoming.kind) {
         case "assistant-text":
             return {
                 ...existing,
                 ...incoming,
+                text:
+                    existing.kind === "assistant-text"
+                        ? mergeAssistantText(existing, incoming)
+                        : collapseRepeatedAssistantText(incoming.text),
                 timestamp,
             };
         case "tool-invocation":
