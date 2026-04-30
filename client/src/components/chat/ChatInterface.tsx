@@ -28,7 +28,11 @@ import {
 import { toast } from "sonner";
 import { ConversationHistoryPanel } from "@/components/chat/ConversationHistoryPanel";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
-import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
+import {
+  type GroupedUserTurn,
+  TranscriptEventBubble,
+  UserTurnBubble,
+} from "@/components/chat/TranscriptEventBubble";
 import { IssuesPanel } from "@/components/chat/IssuesPanel";
 import { ConfirmationDialog } from "@/components/library/ConfirmationDialog";
 import { Badge } from "@/components/ui/badge";
@@ -298,6 +302,12 @@ export const ChatInterface = () => {
         message: ChatMessage;
       }
     | {
+        source: "user-turn";
+        createdAt: number | null;
+        key: string;
+        turn: GroupedUserTurn;
+      }
+    | {
         source: "transcript";
         createdAt: number | null;
         key: string;
@@ -306,6 +316,8 @@ export const ChatInterface = () => {
 
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [];
+    const userTurnsByPromptId = new Map<string, GroupedUserTurn>();
+
     for (const message of messages) {
       if (message.role === "user") {
         continue;
@@ -319,10 +331,61 @@ export const ChatInterface = () => {
     }
     transcriptEvents.forEach((event, index) => {
       const parsed = Date.parse(event.timestamp);
+      const createdAt = Number.isFinite(parsed) ? parsed : null;
+
+      if (event.kind === "user-prompt") {
+        const existingTurn = userTurnsByPromptId.get(event.promptId);
+        if (existingTurn) {
+          existingTurn.prompt = event;
+          existingTurn.timestamp = event.timestamp;
+          existingTurn.harnessType = event.harnessType;
+          return;
+        }
+
+        const turn: GroupedUserTurn = {
+          promptId: event.promptId,
+          prompt: event,
+          attachments: [],
+          timestamp: event.timestamp,
+          harnessType: event.harnessType,
+        };
+        userTurnsByPromptId.set(event.promptId, turn);
+        items.push({
+          source: "user-turn",
+          createdAt,
+          key: `user-turn:${event.promptId}`,
+          turn,
+        });
+        return;
+      }
+
+      if (event.kind === "attachment") {
+        const existingTurn = userTurnsByPromptId.get(event.promptId);
+        if (existingTurn) {
+          existingTurn.attachments.push(event);
+          return;
+        }
+
+        const turn: GroupedUserTurn = {
+          promptId: event.promptId,
+          attachments: [event],
+          timestamp: event.timestamp,
+          harnessType: event.harnessType,
+        };
+        userTurnsByPromptId.set(event.promptId, turn);
+        items.push({
+          source: "user-turn",
+          createdAt,
+          key: `user-turn:${event.promptId}`,
+          turn,
+        });
+        return;
+      }
+
       const stableKey = getTranscriptEventStableKey(event);
       items.push({
         source: "transcript",
-        createdAt: Number.isFinite(parsed) ? parsed : null,
+        createdAt,
         key: stableKey ?? `transcript-${event.kind}-${index}`,
         event,
       });
@@ -1126,6 +1189,8 @@ export const ChatInterface = () => {
                   {timeline.map((item) =>
                     item.source === "message" ? (
                       <MessageBubble key={item.key} {...item.message} />
+                    ) : item.source === "user-turn" ? (
+                      <UserTurnBubble key={item.key} turn={item.turn} />
                     ) : (
                       <TranscriptEventBubble
                         key={item.key}

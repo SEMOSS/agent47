@@ -32,6 +32,14 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+export type GroupedUserTurn = {
+    promptId: string;
+    prompt?: UserPrompt;
+    attachments: AttachmentEvent[];
+    timestamp: string;
+    harnessType?: TranscriptHarness;
+};
+
 const formatTimestamp = (timestamp: string) => {
     try {
         return new Date(timestamp).toLocaleTimeString([], {
@@ -292,6 +300,90 @@ const UserPromptBubble = ({ event }: { event: UserPrompt }) => (
         </div>
     </div>
 );
+
+export const UserTurnBubble = ({ turn }: { turn: GroupedUserTurn }) => {
+    const [selectedAttachmentIndex, setSelectedAttachmentIndex] = useState<
+        number | null
+    >(null);
+    const selectedAttachment =
+        selectedAttachmentIndex === null
+            ? null
+            : turn.attachments[selectedAttachmentIndex] ?? null;
+
+    return (
+        <>
+            <div className="flex flex-col gap-1 items-end">
+                <span className="text-xs text-muted-foreground">
+                    You {" \u00b7 "} {formatTimestamp(turn.timestamp)}
+                </span>
+                <div className="flex max-w-[75%] flex-col gap-2 rounded-2xl bg-gradient-to-r from-slate-700 to-slate-800 px-3 py-3 text-white shadow-md shadow-slate-500/15 dark:from-slate-600 dark:to-slate-700">
+                    {turn.attachments.length > 0 ? (
+                        <div
+                            className={
+                                turn.attachments.length === 1
+                                    ? "grid grid-cols-1 gap-2"
+                                    : "grid grid-cols-2 gap-2"
+                            }
+                        >
+                            {turn.attachments.map((attachment, index) => (
+                                <button
+                                    key={attachment.attachmentId}
+                                    type="button"
+                                    onClick={() =>
+                                        setSelectedAttachmentIndex(index)
+                                    }
+                                    className="overflow-hidden rounded-xl border border-white/10 bg-white/10 text-left transition hover:border-white/20"
+                                    aria-label="Open image attachment"
+                                >
+                                    {attachment.dataUrl ? (
+                                        <img
+                                            src={attachment.dataUrl}
+                                            alt="Uploaded image attachment"
+                                            className="max-h-64 w-full object-cover"
+                                        />
+                                    ) : (
+                                        <div className="flex h-24 w-full items-center justify-center bg-white/10 text-white/80">
+                                            <ImageIcon className="h-5 w-5" />
+                                        </div>
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+                    ) : null}
+                    {turn.prompt?.text ? (
+                        <div className="text-sm">
+                            <MarkdownRenderer content={turn.prompt.text} />
+                        </div>
+                    ) : null}
+                </div>
+            </div>
+
+            <Dialog
+                open={selectedAttachment !== null}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setSelectedAttachmentIndex(null);
+                    }
+                }}
+            >
+                <DialogContent className="max-w-3xl">
+                    <DialogTitle className="sr-only">Image preview</DialogTitle>
+                    {selectedAttachment?.dataUrl ? (
+                        <img
+                            src={selectedAttachment.dataUrl}
+                            alt="Expanded uploaded image attachment"
+                            className="max-h-[75vh] w-full rounded-xl object-contain"
+                        />
+                    ) : (
+                        <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
+                            Preview unavailable for this attachment.
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+        </>
+    );
+};
 
 const AttachmentBubble = ({ event }: { event: AttachmentEvent }) => {
     const [open, setOpen] = useState(false);
