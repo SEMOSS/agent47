@@ -320,7 +320,7 @@ const ImagePreviewDialog = ({
 const UserPromptBubble = ({ event }: { event: UserPrompt }) => (
     <div className="flex flex-col gap-1 items-end">
         <span className="text-xs text-muted-foreground">
-            You \u00b7 {formatTimestamp(event.timestamp)}
+            You{" \u00b7 "}{formatTimestamp(event.timestamp)}
         </span>
         <div className="max-w-[75%] rounded-2xl px-4 py-3 text-sm bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md shadow-slate-500/15 dark:from-slate-600 dark:to-slate-700">
             <MarkdownRenderer content={event.text} />
@@ -341,7 +341,7 @@ export const UserTurnBubble = ({ turn }: { turn: GroupedUserTurn }) => {
         <>
             <div className="flex flex-col gap-1 items-end">
                 <span className="text-xs text-muted-foreground">
-                    You \u00b7 {formatTimestamp(turn.timestamp)}
+                    You{" \u00b7 "}{formatTimestamp(turn.timestamp)}
                 </span>
                 <div className="flex max-w-[75%] flex-col gap-2 rounded-2xl bg-gradient-to-r from-slate-700 to-slate-800 px-3 py-3 text-white shadow-md shadow-slate-500/15 dark:from-slate-600 dark:to-slate-700">
                     {turn.attachments.length > 0 ? (
@@ -405,7 +405,7 @@ const AttachmentBubble = ({ event }: { event: AttachmentEvent }) => {
         <>
             <div className="flex flex-col gap-1 items-end">
                 <span className="text-xs text-muted-foreground">
-                    You \u00b7 {formatTimestamp(event.timestamp)}
+                    You{" \u00b7 "}{formatTimestamp(event.timestamp)}
                 </span>
                 <button
                     type="button"

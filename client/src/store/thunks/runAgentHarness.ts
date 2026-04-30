@@ -1,6 +1,5 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { upload as uploadInsightAsset } from "@semoss/sdk";
-import { v4 as uuidv4 } from "uuid";
 import { parseTranscriptMessage } from "@/lib/parseTranscriptMessage";
 import {
   createSetRoomForInsightPixel,
@@ -197,7 +196,10 @@ const uploadInsightAttachments = async (
         attachment.fileName,
         attachment.mimeType,
       );
-      const attachmentId = uuidv4();
+      // Reuse the PendingAttachment.id (already a uuid). Sharing this id with
+      // the optimistic transcript event lets the post-upload dispatch merge
+      // into the same row and just add the server `path`.
+      const attachmentId = attachment.id;
       const uploadFileName = `${attachmentId}.${extension}`;
       const blob = await dataUrlToBlob(attachment.dataUrl);
 

@@ -75,6 +75,23 @@ export const submitAgentMessage =
         harnessType,
       }),
     );
+    // Render attachment bubbles immediately from the local data URL. The post-
+    // upload dispatch in runAgentHarness reuses these `attachmentId`s, so it
+    // merges into the same transcript rows and just adds the server `path`.
+    for (const attachment of pendingAttachments) {
+      dispatch(
+        addTranscriptEvent({
+          kind: "attachment",
+          attachmentId: attachment.id,
+          promptId,
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          dataUrl: attachment.dataUrl,
+          timestamp,
+          harnessType,
+        }),
+      );
+    }
     dispatch(
       runAgentHarness({
         message: trimmedMessage,
