@@ -38,10 +38,15 @@ import {
   FolderOpen,
   Hammer,
   Info,
+  Maximize2,
+  Minimize2,
+  Monitor,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   RefreshCw,
+  Smartphone,
+  Tablet,
 } from "lucide-react";
 import {
   useCallback,
@@ -65,6 +70,17 @@ type ProjectSummary = {
 
 const PROJECT_ID_STORAGE_KEY = "semoss.activeProjectId";
 const PROJECTS_PAGE_SIZE = 20;
+
+type ViewportMode = "desktop" | "tablet" | "phone";
+
+const VIEWPORT_SIZES: Record<
+  ViewportMode,
+  { width: number; height: number } | null
+> = {
+  desktop: null,
+  tablet: { width: 768, height: 1024 },
+  phone: { width: 375, height: 667 },
+};
 
 const readStoredProjectId = () => {
   if (typeof window === "undefined") {
@@ -189,6 +205,8 @@ export const HomePage = () => {
   const [newProjectName, setNewProjectName] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [isBuilding, setIsBuilding] = useState(false);
+  const [viewportMode, setViewportMode] = useState<ViewportMode>("desktop");
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const activeProject = myProjects.find((p) => getProjectId(p) === projectId);
   const activeProjectName =
     getProjectName(activeProject).trim() ||
@@ -291,6 +309,15 @@ export const HomePage = () => {
       previewCleanupRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isFullscreen]);
 
   const handleBuildAndPublish = useCallback(async () => {
     if (!projectId || isBuilding) return;
@@ -520,7 +547,12 @@ export const HomePage = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 lg:flex-row">
-      <section className="flex min-h-[28rem] flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/50 dark:border-white/10 bg-white/70 shadow-xl shadow-slate-400/10 backdrop-blur-xl dark:bg-zinc-900/60 dark:shadow-black/20">
+      <section
+        className={cn(
+          "flex min-h-[28rem] flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/50 dark:border-white/10 bg-white/70 shadow-xl shadow-slate-400/10 backdrop-blur-xl dark:bg-zinc-900/60 dark:shadow-black/20",
+          isFullscreen && "fixed inset-0 z-50 m-0 rounded-none",
+        )}
+      >
         <div className="flex items-center gap-2 border-b border-slate-200/50 bg-slate-50/80 px-3 py-2 dark:border-white/10 dark:bg-zinc-800/60">
           <button
             type="button"
@@ -603,6 +635,55 @@ export const HomePage = () => {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setViewportMode("desktop")}
+                className={cn(
+                  "rounded-md p-1 text-muted-foreground transition-colors hover:bg-slate-200/60 hover:text-foreground dark:hover:bg-zinc-700/60",
+                  viewportMode === "desktop" &&
+                    "bg-slate-200/70 text-foreground dark:bg-zinc-700/70",
+                )}
+                title="Desktop view"
+              >
+                <Monitor className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewportMode("tablet")}
+                className={cn(
+                  "rounded-md p-1 text-muted-foreground transition-colors hover:bg-slate-200/60 hover:text-foreground dark:hover:bg-zinc-700/60",
+                  viewportMode === "tablet" &&
+                    "bg-slate-200/70 text-foreground dark:bg-zinc-700/70",
+                )}
+                title="Tablet view"
+              >
+                <Tablet className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewportMode("phone")}
+                className={cn(
+                  "rounded-md p-1 text-muted-foreground transition-colors hover:bg-slate-200/60 hover:text-foreground dark:hover:bg-zinc-700/60",
+                  viewportMode === "phone" &&
+                    "bg-slate-200/70 text-foreground dark:bg-zinc-700/70",
+                )}
+                title="Phone view"
+              >
+                <Smartphone className="h-3.5 w-3.5" />
+              </button>
+              <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-white/10" />
+              <button
+                type="button"
+                onClick={() => setIsFullscreen((v) => !v)}
+                className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-slate-200/60 hover:text-foreground dark:hover:bg-zinc-700/60"
+                title={isFullscreen ? "Exit full screen" : "Full screen"}
+              >
+                {isFullscreen ? (
+                  <Minimize2 className="h-3.5 w-3.5" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" />
+                )}
+              </button>
               <Button
                 type="button"
                 variant="outline"
@@ -639,14 +720,37 @@ export const HomePage = () => {
           </button>
         </div>
         {projectId ? (
-          <iframe
-            ref={iframeRef}
-            title="Semoss App"
-            src={iframeSrc}
-            className="h-full w-full"
-            key={iframeRefreshKey}
-            onLoad={handlePreviewLoad}
-          />
+          <div
+            className={cn(
+              "flex h-full w-full items-center justify-center overflow-auto",
+              viewportMode !== "desktop" &&
+                "bg-slate-100 dark:bg-zinc-950",
+            )}
+          >
+            <iframe
+              ref={iframeRef}
+              title="Semoss App"
+              src={iframeSrc}
+              key={iframeRefreshKey}
+              onLoad={handlePreviewLoad}
+              className={cn(
+                "border-0 bg-white",
+                viewportMode === "desktop"
+                  ? "h-full w-full"
+                  : "shadow-lg",
+              )}
+              style={
+                viewportMode === "desktop"
+                  ? undefined
+                  : {
+                      width: VIEWPORT_SIZES[viewportMode]!.width,
+                      height: VIEWPORT_SIZES[viewportMode]!.height,
+                      maxWidth: "100%",
+                      maxHeight: "100%",
+                    }
+              }
+            />
+          </div>
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center">
             <p className="text-sm text-muted-foreground">{emptyStateMessage}</p>
