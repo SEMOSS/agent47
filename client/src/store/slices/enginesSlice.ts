@@ -122,6 +122,51 @@ export const fetchEnginesByType = createAsyncThunk<
   return { type, items, filterWord: search };
 });
 
+const PIXEL_CATEGORY_KEY: Record<EngineCategory, string> = {
+  MODEL: "model_engines",
+  DATABASE: "database_engines",
+  STORAGE: "storage_engines",
+  VECTOR: "vector_engines",
+};
+
+export const loadSelectedModelEngines = createAsyncThunk<
+  EngineItem[],
+  { projectId: string; runPixel: RunPixelFn }
+>("engines/loadSelectedModelEngines", async ({ projectId, runPixel }) => {
+  const pixel = `GetSelectedModelEngines(project='${projectId}');`;
+  const response = await runPixel<unknown>(pixel);
+  if (!Array.isArray(response)) return [];
+  return response
+    .map((row): EngineItem | null => {
+      if (!row || typeof row !== "object") return null;
+      const r = row as Record<string, unknown>;
+      const id = r.id;
+      if (typeof id !== "string" || !id) return null;
+      const name = typeof r.name === "string" && r.name ? r.name : id;
+      return { id, name, subtype: "", type: "MODEL" };
+    })
+    .filter((e): e is EngineItem => e !== null);
+});
+
+export const saveSelectedEngines = createAsyncThunk<
+  void,
+  {
+    projectId: string;
+    category: EngineCategory;
+    engines: EngineItem[];
+    runPixel: RunPixelFn;
+  }
+>(
+  "engines/saveSelectedEngines",
+  async ({ projectId, category, engines, runPixel }) => {
+    const list = engines.map((e) => ({ name: e.name, id: e.id }));
+    const enginesJson = JSON.stringify(list);
+    const key = PIXEL_CATEGORY_KEY[category];
+    const pixel = `UpdateAppBuilderConfig(project='${projectId}', ${key}=[${enginesJson}]);`;
+    await runPixel(pixel);
+  },
+);
+
 const enginesSlice = createSlice({
   name: "engines",
   initialState,
@@ -171,6 +216,9 @@ const enginesSlice = createSlice({
     });
     builder.addCase(fetchEnginesByType.rejected, (state, action) => {
       state.browse[action.meta.arg.type].isLoading = false;
+    });
+    builder.addCase(loadSelectedModelEngines.fulfilled, (state, action) => {
+      state.selectedEngines.MODEL = action.payload;
     });
   },
 });

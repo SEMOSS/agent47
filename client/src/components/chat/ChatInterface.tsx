@@ -93,6 +93,7 @@ import {
   querySkills,
   updateSkill,
 } from "@/store/slices/skillsSlice";
+import { loadSelectedModelEngines } from "@/store/slices/enginesSlice";
 import { submitAgentMessage } from "@/store/thunks/submitAgentMessage";
 import { getTranscriptEventStableKey } from "@/types/transcript";
 
@@ -254,6 +255,7 @@ export const ChatInterface = () => {
   const isPinnedToBottomRef = useRef(true);
   const wasStreamingRef = useRef(false);
   const fetchedSkillsProjectIdRef = useRef<string | null>(null);
+  const loadedSelectedEnginesProjectIdRef = useRef<string | null>(null);
   const trimmedMessage = inputMessage.trim();
   const isStreaming = pendingMessageId !== null;
   const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
@@ -506,6 +508,20 @@ export const ChatInterface = () => {
     setEditingSkillTabId(null);
     setActiveSkillTabId("");
   }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) {
+      loadedSelectedEnginesProjectIdRef.current = null;
+      return;
+    }
+    if (loadedSelectedEnginesProjectIdRef.current === projectId) return;
+    loadedSelectedEnginesProjectIdRef.current = projectId;
+    void dispatch(loadSelectedModelEngines({ projectId, runPixel })).unwrap()
+      .catch((error) => {
+        console.error("Failed to load selected model engines:", error);
+        loadedSelectedEnginesProjectIdRef.current = null;
+      });
+  }, [dispatch, projectId, runPixel]);
 
   const fetchEngines = useCallback(
     async (search: string) => {

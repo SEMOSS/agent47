@@ -20,9 +20,23 @@ import {
   fetchEnginesByType,
   removeSelectedEngine,
   resetBrowse,
+  saveSelectedEngines,
   setEngineSearch,
 } from "@/store/slices/enginesSlice";
+import { querySkills } from "@/store/slices/skillsSlice";
 import { getEngineIcon } from "./engineIcon";
+
+const SKILLS_REFRESH_DEBOUNCE_MS = 500;
+let skillsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+const debounceSkillsRefresh = (run: () => void) => {
+  if (skillsRefreshTimer !== null) {
+    clearTimeout(skillsRefreshTimer);
+  }
+  skillsRefreshTimer = setTimeout(() => {
+    skillsRefreshTimer = null;
+    run();
+  }, SKILLS_REFRESH_DEBOUNCE_MS);
+};
 
 interface EngineSelectionDialogProps {
   category: EngineCategory;
@@ -45,6 +59,7 @@ export function EngineSelectionDialog({
   const selected = useAppSelector(
     (state) => state.engines.selectedEngines[category],
   );
+  const projectId = useAppSelector((state) => state.chat.projectId);
 
   const search = browse.search;
 
@@ -60,6 +75,25 @@ export function EngineSelectionDialog({
 
   const handleOpenChange = (next: boolean) => {
     if (!next) {
+      if (projectId) {
+        void dispatch(
+          saveSelectedEngines({
+            projectId,
+            category,
+            engines: selected,
+            runPixel,
+          }),
+        )
+          .unwrap()
+          .then(() => {
+            debounceSkillsRefresh(() => {
+              void dispatch(querySkills({ projectId, runPixel }));
+            });
+          })
+          .catch(() => {
+            // save failure already surfaces a toast via runPixel; skip refresh
+          });
+      }
       dispatch(resetBrowse(category));
     }
     onOpenChange(next);

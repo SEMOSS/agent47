@@ -177,7 +177,7 @@ export const querySkills = createAsyncThunk<
   { skills: Skill[]; claudeMd: ClaudeMd | null },
   { projectId: string; runPixel: RunPixelFn }
 >("skills/querySkills", async ({ projectId, runPixel }) => {
-  const pixelString = `ClaudeCodeGetSkills( project='${projectId}' ) ;`;
+  const pixelString = `GetAppSkills( project='${projectId}' ) ;`;
   try {
     const response = await runPixel<unknown>(pixelString);
     // console.log("querySkills response:", response);
@@ -202,7 +202,7 @@ export const updateSkill = createAsyncThunk<
     const safeProjectId = sanitizePixelArg(projectId);
     const safeSkillName = sanitizePixelArg(skillName);
     const safeSkillContent = sanitizePixelArg(skillContent);
-    const pixelString = `ClaudeCodeUpdateSkill( project='${safeProjectId}', skillName='${safeSkillName}', skillContent='${safeSkillContent}' ) ;`;
+    const pixelString = `UpdateAppSkill( project='${safeProjectId}', skillName='${safeSkillName}', skillContent='${safeSkillContent}' ) ;`;
     try {
       const response = await runPixel<unknown>(pixelString);
       console.log("updateSkill response:", response);
@@ -223,7 +223,7 @@ export const deleteSkill = createAsyncThunk<
 >("skills/deleteSkill", async ({ projectId, skillName, runPixel }) => {
   const safeProjectId = sanitizePixelArg(projectId);
   const safeSkillName = sanitizePixelArg(skillName);
-  const pixelString = `ClaudeCodeDeleteSkill( project='${safeProjectId}', skillName='${safeSkillName}' ) ;`;
+  const pixelString = `DeleteAppSkill( project='${safeProjectId}', skillName='${safeSkillName}' ) ;`;
   try {
     const response = await runPixel<unknown>(pixelString);
     console.log("deleteSkill response:", response);
@@ -251,7 +251,7 @@ export const createSkill = createAsyncThunk<
     const safeProjectId = sanitizePixelArg(projectId);
     const safeSkillName = sanitizePixelArg(skillName);
     const safeSkillContent = sanitizePixelArg(skillContent);
-    const pixelString = `ClaudeCodeCreateSkill( project='${safeProjectId}', skillName='${safeSkillName}', skillContent='${safeSkillContent}' ) ;`;
+    const pixelString = `CreateAppSkill( project='${safeProjectId}', skillName='${safeSkillName}', skillContent='${safeSkillContent}' ) ;`;
     try {
       const response = await runPixel<unknown>(pixelString);
       console.log("createSkill response:", response);
