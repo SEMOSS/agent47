@@ -2,6 +2,7 @@ import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import { v4 as uuidv4 } from "uuid";
 import type { TranscriptHarness } from "@/types/transcript";
 import { createProject, createReactProject } from "./createProjectSlice";
+import type { EnginesState } from "./enginesSlice";
 import { runAgentHarness } from "../thunks/runAgentHarness";
 
 export type ConversationRoom = {
@@ -352,12 +353,52 @@ export const {
 } = chatSlice.actions;
 export { createRoomId };
 
+type EngineContextDescriptor = {
+  noun: string;
+  skill: string;
+};
+
+const ENGINE_CONTEXT: Record<keyof EnginesState["selectedEngines"], EngineContextDescriptor> = {
+  MODEL: { noun: "models", skill: "model-engine" },
+  DATABASE: { noun: "databases", skill: "database-engine" },
+  STORAGE: { noun: "storage engines", skill: "storage-engine" },
+  VECTOR: { noun: "vector databases", skill: "vector-engine" },
+};
+
+const buildEngineContextBlock = (engines: EnginesState["selectedEngines"]): string => {
+  const lines: string[] = [];
+  (Object.keys(ENGINE_CONTEXT) as Array<keyof typeof ENGINE_CONTEXT>).forEach(
+    (type) => {
+      const list = engines[type];
+      if (!list?.length) return;
+      const formatted = list
+        .map((engine) => `NAME: ${engine.name}, ID: ${engine.id}`)
+        .join("; ");
+      const { noun, skill } = ENGINE_CONTEXT[type];
+      lines.push(
+        `The user would like to incorporate the following ${noun} into the application: ${formatted}. You can reference how to query and use these ${noun} in the ${skill} skill. If the user does not mention these ${noun} in their prompt, do not feel the need to FORCE their use.`,
+      );
+    },
+  );
+  if (lines.length === 0) return "";
+  lines.push(
+    "You may still use any other engines the user requests in their prompt — you are not limited to the engines listed above.",
+  );
+  return lines.join(" ");
+};
+
 export const selectEffectiveSystemPrompt = (state: {
   chat: ChatState;
+  engines?: EnginesState;
 }): string => {
   const { systemPrompt, projectId } = state.chat;
-  if (!projectId) return systemPrompt;
-  return `THE PROJECT ID IS ${projectId}. ${systemPrompt}`;
+  const base = projectId
+    ? `THE PROJECT ID IS ${projectId}. ${systemPrompt}`
+    : systemPrompt;
+  const engineBlock = state.engines
+    ? buildEngineContextBlock(state.engines.selectedEngines)
+    : "";
+  return engineBlock ? `${base} ${engineBlock}` : base;
 };
 
 export default chatSlice.reducer;

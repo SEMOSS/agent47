@@ -27,7 +27,8 @@ import { ConversationHistoryPanel } from "@/components/chat/ConversationHistoryP
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
 import { IssuesPanel } from "@/components/chat/IssuesPanel";
-import { ConfirmationDialog } from "@/components/library/ConfirmationDialog";
+import { EnginesPanel } from "@/components/chat/EnginesPanel";
+import { ConfirmationDialog } from "@/library/ConfirmationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -218,9 +219,9 @@ export const ChatInterface = () => {
   const [isConfigurationOpen, setIsConfigurationOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isSkillsOpen, setIsSkillsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"build" | "issues" | "settings">(
-    "build",
-  );
+  const [activeTab, setActiveTab] = useState<
+    "build" | "issues" | "engines" | "settings"
+  >("build");
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isLoadingSkills, setIsLoadingSkills] = useState(false);
   const [skillsError, setSkillsError] = useState<string | null>(null);
@@ -951,7 +952,9 @@ export const ChatInterface = () => {
         <Tabs
           value={activeTab}
           onValueChange={(value) =>
-            setActiveTab(value as "build" | "issues" | "settings")
+            setActiveTab(
+              value as "build" | "issues" | "engines" | "settings",
+            )
           }
           className="relative flex h-full flex-col"
         >
@@ -962,6 +965,9 @@ export const ChatInterface = () => {
               </p>
             </div>
             <div className="relative flex items-center justify-center">
+              <div className="absolute left-0 top-1/2 -translate-y-1/2">
+                <ConversationHistoryPanel />
+              </div>
               <TabsList>
                 <TabsTrigger value="build">Build</TabsTrigger>
                 <TabsTrigger value="issues" className="gap-2">
@@ -975,10 +981,10 @@ export const ChatInterface = () => {
                     </Badge>
                   ) : null}
                 </TabsTrigger>
+                <TabsTrigger value="engines">Engines</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
               </TabsList>
               <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1">
-                <ConversationHistoryPanel />
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1065,6 +1071,13 @@ export const ChatInterface = () => {
 
           <TabsContent value="issues" className="mt-0 flex flex-1 min-h-0">
             <IssuesPanel onAskToFix={handleAskToFixIssues} />
+          </TabsContent>
+
+          <TabsContent
+            value="engines"
+            className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 p-4 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
+          >
+            <EnginesPanel />
           </TabsContent>
 
           <TabsContent

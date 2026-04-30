@@ -6,6 +6,7 @@ import myProjectsReducer from "./slices/myProjects";
 import skillsReducer from "./slices/skillsSlice";
 import transcriptReducer from "./slices/transcriptSlice";
 import issuesReducer from "./slices/issuesSlice";
+import enginesReducer from "./slices/enginesSlice";
 
 export const store = configureStore({
 	reducer: {
@@ -16,6 +17,7 @@ export const store = configureStore({
 		skills: skillsReducer,
 		transcript: transcriptReducer,
 		issues: issuesReducer,
+		engines: enginesReducer,
 	},
 });
 

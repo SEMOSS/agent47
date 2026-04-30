@@ -7,6 +7,7 @@ import {
   updateConversationRoomName,
 } from "../slices/chatSlice";
 import type { MCPState } from "../slices/mcpSlice";
+import type { EnginesState } from "../slices/enginesSlice";
 import { addTranscriptEvent } from "../slices/transcriptSlice";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
@@ -63,7 +64,7 @@ export const updateRoomOptions = createAsyncThunk<
     model: string;
     runPixel: RunPixelFn;
   },
-  { rejectValue: string; state: { chat: ChatState; mcp: MCPState } }
+  { rejectValue: string; state: { chat: ChatState; mcp: MCPState; engines: EnginesState } }
 >(
   "chat/updateRoomOptions",
   async (
@@ -108,7 +109,7 @@ export const runAgentHarness = createAsyncThunk<
     projectId?: string;
     engineId?: string;
   },
-  { rejectValue: string; state: { chat: ChatState; mcp: MCPState } }
+  { rejectValue: string; state: { chat: ChatState; mcp: MCPState; engines: EnginesState } }
 >(
   "chat/runAgentHarness",
   async (
@@ -124,7 +125,7 @@ export const runAgentHarness = createAsyncThunk<
     { rejectWithValue, getState, dispatch },
   ) => {
     try {
-      const { chat, mcp } = getState();
+      const { chat, mcp, engines } = getState();
       const targetProjectId = projectId ?? chat.projectId;
 
       const selectedMcps: MCPDetails[] = mcp.selectedMcps.map((x) => ({
@@ -135,7 +136,7 @@ export const runAgentHarness = createAsyncThunk<
 
       const updateRoomOptionsPixel = createUpdateRoomOptionsPixel(
         chat.roomId,
-        selectEffectiveSystemPrompt({ chat }),
+        selectEffectiveSystemPrompt({ chat, engines }),
         selectedMcps,
         chat.engineId,
         chat.harnessType,
