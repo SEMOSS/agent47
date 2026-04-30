@@ -123,10 +123,9 @@ const parseAssistantMessageEvent = (
 const parseToolExecutionStartEvent = (
     msg: Record<string, unknown>,
 ): TranscriptEvent[] => {
-    const data = asRecord(msg.data);
-    if (!data) {
-        return [];
-    }
+    // Tolerate both the history shape ({type, data:{...}}) and the post-unwrap
+    // streaming shape (where `data` has been merged into msg).
+    const data = asRecord(msg.data) ?? msg;
 
     const parsed = parseSingleEvent(
         {
@@ -146,10 +145,7 @@ const parseToolExecutionStartEvent = (
 const parseToolExecutionCompleteEvent = (
     msg: Record<string, unknown>,
 ): TranscriptEvent[] => {
-    const data = asRecord(msg.data);
-    if (!data) {
-        return [];
-    }
+    const data = asRecord(msg.data) ?? msg;
 
     const result = asRecord(data.result);
     const parsed = parseSingleEvent(

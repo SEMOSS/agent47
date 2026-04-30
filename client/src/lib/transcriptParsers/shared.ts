@@ -207,9 +207,15 @@ export const unwrapEnvelope = (
         const data = asRecord(msg.data);
         if (data) {
             msg = {
+                // Preserve identity + the typed-event discriminator across
+                // the unwrap; otherwise stream envelopes like
+                // { stream_type, data: { type, data: {...inner} } } drop
+                // `type` after the second peel, which makes
+                // parseTypedCopilotEvent fall through and silently emit nothing.
                 ...("event" in msg ? { event: msg.event } : {}),
                 ...("uuid" in msg ? { uuid: msg.uuid } : {}),
                 ...("sessionId" in msg ? { sessionId: msg.sessionId } : {}),
+                ...("type" in msg ? { type: msg.type } : {}),
                 ...data,
             };
             continue;
@@ -221,6 +227,7 @@ export const unwrapEnvelope = (
                 ...("event" in msg ? { event: msg.event } : {}),
                 ...("uuid" in msg ? { uuid: msg.uuid } : {}),
                 ...("sessionId" in msg ? { sessionId: msg.sessionId } : {}),
+                ...("type" in msg ? { type: msg.type } : {}),
                 ...payload,
             };
             continue;
