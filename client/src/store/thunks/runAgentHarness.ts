@@ -1,7 +1,14 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
+import { upload as uploadInsightAsset } from "@semoss/sdk";
 import { parseTranscriptMessage } from "@/lib/parseTranscriptMessage";
+import {
+  createSetRoomForInsightPixel,
+  sanitizeInsightFilePath,
+  sanitizePixelArg,
+} from "@/lib/pixelHelpers";
 import type { StreamingResponse } from "@/contexts/AppContext";
 import {
+  type PendingAttachment,
   selectEffectiveSystemPrompt,
   type ChatState,
   updateConversationRoomName,
@@ -28,13 +35,47 @@ type GetPixelAsyncResultFn = <O extends unknown[] | []>(
 }>;
 type GetPixelJobStreamingFn = (jobId: string) => Promise<StreamingResponse>;
 
-const sanitizePixelArg = (value: string) => value.replace(/'/g, '"');
-
 interface MCPDetails {
   id: string;
   name: string;
   type: string;
 }
+
+type UploadedRoomAttachment = {
+  attachmentId: string;
+  promptId: string;
+  fileName: string;
+  mimeType: string;
+  path: string;
+  timestamp: string;
+};
+
+const sanitizeFileName = (value: string) =>
+  value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "image.png";
+
+const dataUrlToBlob = async (dataUrl: string): Promise<Blob> => {
+  const response = await fetch(dataUrl);
+  if (!response.ok) {
+    throw new Error("Unable to prepare image upload.");
+  }
+  return response.blob();
+};
+
+const getUploadFileExtension = (fileName: string, mimeType: string) => {
+  const extensionFromName = sanitizeFileName(fileName)
+    .split(".")
+    .pop()
+    ?.trim();
+  if (extensionFromName) {
+    return extensionFromName;
+  }
+  const extensionFromMimeType = mimeType.split("/")[1]?.trim();
+  return sanitizeFileName(extensionFromMimeType || "png");
+};
 
 const createUpdateRoomOptionsPixel = (
   roomId: string,
@@ -53,6 +94,23 @@ const createUpdateRoomOptionsPixel = (
     : "";
   return `UpdateRoomOptions(roomId='${roomId}', roomOptions=[{"instructions":'${safeInstructions}', "modelId":'${model}', "harnessType":'${harnessType}', "mcp":[${mcpStrings.join(",")}]${targetProjectPart} }] )`;
 };
+
+const createEnsureRoomInsightBoundPixel = (
+  roomId: string,
+  instructions: string,
+  mcps: MCPDetails[],
+  model: string,
+  harnessType: ChatState["harnessType"],
+  targetProjectId?: string,
+) =>
+  `${createUpdateRoomOptionsPixel(
+    roomId,
+    instructions,
+    mcps,
+    model,
+    harnessType,
+    targetProjectId,
+  )};${createSetRoomForInsightPixel(roomId)}`;
 
 export const updateRoomOptions = createAsyncThunk<
   { response: boolean },
@@ -82,7 +140,9 @@ export const updateRoomOptions = createAsyncThunk<
         harnessType,
         projectId || undefined,
       );
-      const response = await runPixel<boolean>(pixelString);
+      const response = await runPixel<boolean>(
+        `${pixelString};${createSetRoomForInsightPixel(roomId)}`,
+      );
       return {
         response,
       };
@@ -93,13 +153,115 @@ export const updateRoomOptions = createAsyncThunk<
   },
 );
 
+const ensureRoomInsightBound = async (
+  roomId: string,
+  instructions: string,
+  mcps: MCPDetails[],
+  model: string,
+  harnessType: ChatState["harnessType"],
+  runPixel: RunPixelFn,
+  targetProjectId?: string,
+) => {
+  await runPixel(
+    createEnsureRoomInsightBoundPixel(
+      roomId,
+      instructions,
+      mcps,
+      model,
+      harnessType,
+      targetProjectId,
+    ),
+  );
+};
+
 const TERMINAL_STATUSES = new Set(["ProgressComplete", "Complete", "Error"]);
 const POLLING_INTERVAL_MS = 300;
+
+const uploadInsightAttachments = async (
+  promptId: string,
+  attachments: PendingAttachment[],
+  insightId: string,
+): Promise<UploadedRoomAttachment[]> => {
+  if (attachments.length === 0) {
+    return [];
+  }
+
+  if (!insightId) {
+    throw new Error("An active insight is required to upload images.");
+  }
+
+  const preparedUploads = await Promise.all(
+    attachments.map(async (attachment) => {
+      const extension = getUploadFileExtension(
+        attachment.fileName,
+        attachment.mimeType,
+      );
+      // Reuse the PendingAttachment.id (already a uuid). Sharing this id with
+      // the optimistic transcript event lets the post-upload dispatch merge
+      // into the same row and just add the server `path`.
+      const attachmentId = attachment.id;
+      const uploadFileName = `${attachmentId}.${extension}`;
+      const blob = await dataUrlToBlob(attachment.dataUrl);
+
+      return {
+        attachmentId,
+        promptId,
+        fileName: sanitizeFileName(attachment.fileName),
+        mimeType: attachment.mimeType,
+        timestamp: new Date().toISOString(),
+        uploadFileName,
+        file: new File([blob], uploadFileName, { type: attachment.mimeType }),
+      };
+    }),
+  );
+
+  const uploadPath = `agent-chat/${promptId}`;
+  const payload = await uploadInsightAsset(
+    preparedUploads.map((attachment) => attachment.file),
+    insightId,
+    null,
+    uploadPath,
+  );
+
+  if (!Array.isArray(payload)) {
+    throw new Error("Unexpected upload response from Monolith.");
+  }
+
+  const uploadedPathByName = new Map<string, string>();
+  payload.forEach((item) => {
+    if (item.fileName && item.fileLocation) {
+      uploadedPathByName.set(
+        item.fileName,
+        sanitizeInsightFilePath(item.fileLocation),
+      );
+    }
+  });
+
+  return preparedUploads.map((attachment) => {
+    const uploadedPath = uploadedPathByName.get(attachment.uploadFileName);
+    if (!uploadedPath) {
+      throw new Error(
+        `Image upload response did not include ${attachment.uploadFileName}.`,
+      );
+    }
+    return {
+      attachmentId: attachment.attachmentId,
+      promptId: attachment.promptId,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      path: uploadedPath,
+      timestamp: attachment.timestamp,
+    };
+  });
+};
 
 export const runAgentHarness = createAsyncThunk<
   { response: string },
   {
     message: string;
+    promptId: string;
+    attachments?: PendingAttachment[];
+    insightId: string;
     shouldGenerateRoomName?: boolean;
     runPixel: RunPixelFn;
     runPixelAsync: RunPixelAsyncFn;
@@ -114,6 +276,9 @@ export const runAgentHarness = createAsyncThunk<
   async (
     {
       message,
+      promptId,
+      attachments = [],
+      insightId,
       shouldGenerateRoomName,
       runPixel,
       runPixelAsync,
@@ -133,21 +298,52 @@ export const runAgentHarness = createAsyncThunk<
         type: x.type,
       }));
 
-      const updateRoomOptionsPixel = createUpdateRoomOptionsPixel(
-        chat.roomId,
-        selectEffectiveSystemPrompt({ chat }),
-        selectedMcps,
-        chat.engineId,
-        chat.harnessType,
-        targetProjectId || undefined,
-      );
-      await runPixel(updateRoomOptionsPixel);
-
+      // Bind the room+insight and upload any image attachments concurrently;
+      // they have no data dependency on each other.
       const safeMessage = sanitizePixelArg(message);
+      const [, uploadedAttachments] = await Promise.all([
+        ensureRoomInsightBound(
+          chat.roomId,
+          selectEffectiveSystemPrompt({ chat }),
+          selectedMcps,
+          chat.engineId,
+          chat.harnessType,
+          runPixel,
+          targetProjectId || undefined,
+        ),
+        attachments.length === 0
+          ? Promise.resolve([] as UploadedRoomAttachment[])
+          : uploadInsightAttachments(promptId, attachments, insightId),
+      ]);
+
+      uploadedAttachments.forEach((uploadedAttachment, index) => {
+        const matchingDraft = attachments[index];
+        dispatch(
+          addTranscriptEvent({
+            kind: "attachment",
+            attachmentId: uploadedAttachment.attachmentId,
+            promptId: uploadedAttachment.promptId,
+            fileName: uploadedAttachment.fileName,
+            mimeType: uploadedAttachment.mimeType,
+            path: uploadedAttachment.path,
+            dataUrl: matchingDraft?.dataUrl,
+            timestamp: uploadedAttachment.timestamp,
+            harnessType: chat.harnessType,
+          }),
+        );
+      });
 
       const paramMap = {
         project: targetProjectId,
         permissionMode: chat.permissionMode,
+        promptId,
+        mediaInputs: uploadedAttachments.map((attachment) => ({
+          attachmentId: attachment.attachmentId,
+          promptId: attachment.promptId,
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          path: attachment.path,
+        })),
       };
 
       const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='<encode>${safeMessage}</encode>', harnessType="${chat.harnessType}", maxReflections=20, paramValues=[${JSON.stringify(paramMap)}]) ;`;

@@ -50,6 +50,7 @@ export interface StreamingResponse {
 }
 
 export interface AppContextType {
+	insightId: string;
 	runPixel: (<T = unknown>(
 		pixelString: string,
 		successMessage?: string,
@@ -363,6 +364,7 @@ export const AppContextProvider = ({ children }: PropsWithChildren) => {
 	return (
 		<AppContext.Provider
 			value={{
+				insightId,
 				runPixel,
 				runPixelAsync: runPixelAsyncFn,
 				getPixelAsyncResult: getPixelAsyncResultFn,

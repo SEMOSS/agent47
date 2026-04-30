@@ -3,9 +3,9 @@ import {
   createAsyncThunk,
   type PayloadAction,
 } from "@reduxjs/toolkit";
+import { sanitizePixelArg } from "@/lib/pixelHelpers";
 
 type RunPixelFn = <T = unknown>(pixelString: string) => Promise<T>;
-const sanitizePixelArg = (value: string) => value.replace(/'/g, '"');
 
 interface Skill {
   name: string;

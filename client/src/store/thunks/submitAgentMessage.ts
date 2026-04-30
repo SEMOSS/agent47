@@ -1,5 +1,10 @@
 import type { AppDispatch, RootState } from "@/store";
-import { addMessage, setInputMessage } from "../slices/chatSlice";
+import { v4 as uuidv4 } from "uuid";
+import {
+  clearPendingAttachments,
+  setInputMessage,
+} from "../slices/chatSlice";
+import { addTranscriptEvent } from "../slices/transcriptSlice";
 import { runAgentHarness } from "./runAgentHarness";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
@@ -31,6 +36,7 @@ type GetPixelJobStreamingFn = (
 
 type SubmitAgentMessageArgs = {
   message: string;
+  insightId: string;
   runPixel: RunPixelFn;
   runPixelAsync: RunPixelAsyncFn;
   getPixelAsyncResult: GetPixelAsyncResultFn;
@@ -40,6 +46,7 @@ type SubmitAgentMessageArgs = {
 export const submitAgentMessage =
   ({
     message,
+    insightId,
     runPixel,
     runPixelAsync,
     getPixelAsyncResult,
@@ -52,15 +59,45 @@ export const submitAgentMessage =
     }
 
     const state = getState();
-    const { projectId, messages } = state.chat;
+    const { projectId, messages, pendingAttachments, harnessType } = state.chat;
     const hasExistingConversationContent =
       state.transcript.events.length > 0 ||
       messages.some((chatMessage) => chatMessage.role !== "system");
+    const promptId = uuidv4();
+    const timestamp = new Date().toISOString();
 
-    dispatch(addMessage({ role: "user", content: trimmedMessage }));
+    dispatch(
+      addTranscriptEvent({
+        kind: "user-prompt",
+        promptId,
+        text: trimmedMessage,
+        timestamp,
+        harnessType,
+      }),
+    );
+    // Render attachment bubbles immediately from the local data URL. The post-
+    // upload dispatch in runAgentHarness reuses these `attachmentId`s, so it
+    // merges into the same transcript rows and just adds the server `path`.
+    for (const attachment of pendingAttachments) {
+      dispatch(
+        addTranscriptEvent({
+          kind: "attachment",
+          attachmentId: attachment.id,
+          promptId,
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          dataUrl: attachment.dataUrl,
+          timestamp,
+          harnessType,
+        }),
+      );
+    }
     dispatch(
       runAgentHarness({
         message: trimmedMessage,
+        promptId,
+        attachments: pendingAttachments,
+        insightId,
         shouldGenerateRoomName: !hasExistingConversationContent,
         runPixel,
         runPixelAsync,
@@ -70,4 +107,5 @@ export const submitAgentMessage =
       }),
     );
     dispatch(setInputMessage(""));
+    dispatch(clearPendingAttachments());
   };

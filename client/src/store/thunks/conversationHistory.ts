@@ -1,5 +1,10 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { parseTranscriptMessage } from "@/lib/parseTranscriptMessage";
+import {
+  createSetRoomForInsightPixel,
+  sanitizeInsightFilePath,
+  sanitizePixelArg,
+} from "@/lib/pixelHelpers";
 import type { TranscriptEvent } from "@/types/transcript";
 import {
   type ChatState,
@@ -15,7 +20,6 @@ import {
 import { clearTranscript, setTranscriptEvents } from "../slices/transcriptSlice";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
-const sanitizePixelArg = (value: string) => value.replace(/'/g, '"');
 
 type RawRoom = {
   ROOM_ID?: string;
@@ -104,16 +108,56 @@ const loadGitHubCopilotHistory = async (
   );
 };
 
+const sortHistoryEvents = (
+  transcript: TranscriptEvent[],
+): TranscriptEvent[] =>
+  [...transcript]
+    .map((event, index) => ({ event, index }))
+    .sort((a, b) => {
+      const aTime = Date.parse(a.event.timestamp);
+      const bTime = Date.parse(b.event.timestamp);
+      const aHasTime = Number.isFinite(aTime);
+      const bHasTime = Number.isFinite(bTime);
+
+      if (aHasTime && bHasTime && aTime !== bTime) {
+        return aTime - bTime;
+      }
+
+      if (aHasTime !== bHasTime) {
+        return aHasTime ? -1 : 1;
+      }
+
+      if (
+        a.event.kind === "attachment" &&
+        b.event.kind === "user-prompt" &&
+        a.event.promptId === b.event.promptId
+      ) {
+        return -1;
+      }
+
+      if (
+        a.event.kind === "user-prompt" &&
+        b.event.kind === "attachment" &&
+        a.event.promptId === b.event.promptId
+      ) {
+        return 1;
+      }
+
+      return a.index - b.index;
+    })
+    .map(({ event }) => event);
+
 const loadHistoryForHarness = async (
   roomId: string,
   harnessType: ChatState["harnessType"],
   runPixel: RunPixelFn,
 ): Promise<TranscriptEvent[]> => {
-  if (harnessType === "claude_code") {
-    return loadClaudeCodeHistory(roomId, runPixel);
-  }
+  const transcript =
+    harnessType === "claude_code"
+      ? await loadClaudeCodeHistory(roomId, runPixel)
+      : await loadGitHubCopilotHistory(roomId, runPixel);
 
-  return loadGitHubCopilotHistory(roomId, runPixel);
+  return sortHistoryEvents(transcript);
 };
 
 const inferHistoryFromRoom = async (
@@ -133,33 +177,73 @@ const inferHistoryFromRoom = async (
     copilotResult.status === "fulfilled" ? copilotResult.value : [];
   const claudeEvents =
     claudeResult.status === "fulfilled" ? claudeResult.value : [];
-
   if (copilotEvents.length > 0 && claudeEvents.length === 0) {
     return {
       harnessType: "github_copilot_py",
-      events: copilotEvents,
+      events: sortHistoryEvents(copilotEvents),
     };
   }
 
   if (claudeEvents.length > 0 && copilotEvents.length === 0) {
     return {
       harnessType: "claude_code",
-      events: claudeEvents,
+      events: sortHistoryEvents(claudeEvents),
     };
   }
 
   if (fallbackHarnessType === "github_copilot_py") {
     return {
       harnessType: "github_copilot_py",
-      events: copilotEvents,
+      events: sortHistoryEvents(copilotEvents),
     };
   }
 
   return {
     harnessType: "claude_code",
-    events: claudeEvents,
+    events: sortHistoryEvents(claudeEvents),
   };
 };
+
+const toDataUrl = (mimeType: string, value: string) =>
+  value.startsWith("data:")
+    ? value
+    : `data:${mimeType || "application/octet-stream"};base64,${value}`;
+
+const hydrateAttachmentPreviews = async (
+  events: TranscriptEvent[],
+  runPixel: RunPixelFn,
+): Promise<TranscriptEvent[]> =>
+  Promise.all(
+    events.map(async (event) => {
+      if (event.kind !== "attachment" || event.dataUrl || !event.path) {
+        return event;
+      }
+
+      try {
+        const base64 = await runPixel<string>(
+          `GetInsightAssetsBase64(filePath='${sanitizePixelArg(
+            sanitizeInsightFilePath(event.path),
+          )}');`,
+        );
+
+        if (!base64) {
+          return event;
+        }
+
+        return {
+          ...event,
+          dataUrl: toDataUrl(event.mimeType, base64),
+        };
+      } catch (error) {
+        console.warn(
+          "Failed to hydrate attachment preview for transcript event:",
+          event.path,
+          error,
+        );
+        return event;
+      }
+    }),
+  );
 
 export const loadConversationHistory = createAsyncThunk<
   ConversationRoom[],
@@ -215,8 +299,9 @@ export const resumeConversation = createAsyncThunk<
       dispatch(setRoomId(roomId));
       dispatch(setMessages([]));
       dispatch(clearTranscript());
+      await runPixel(createSetRoomForInsightPixel(roomId));
 
-      const { harnessType, events } = storedHarnessType
+      const { harnessType, events: rawEvents } = storedHarnessType
         ? {
             harnessType: storedHarnessType,
             events: await loadHistoryForHarness(
@@ -226,6 +311,7 @@ export const resumeConversation = createAsyncThunk<
             ),
           }
         : await inferHistoryFromRoom(roomId, fallbackHarnessType, runPixel);
+      const events = await hydrateAttachmentPreviews(rawEvents, runPixel);
 
       dispatch(setHarnessType(harnessType));
       dispatch(setTranscriptEvents(events));

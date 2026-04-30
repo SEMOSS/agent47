@@ -163,6 +163,7 @@ export const extractToolResultContent = (
 const inferKind = (
     msg: UnknownRecord,
 ): TranscriptEvent["kind"] | null => {
+    if ("attachmentId" in msg && "promptId" in msg) return "attachment";
     if ("durationMs" in msg) return "tool-result";
     if ("toolName" in msg) return "tool-invocation";
     if ("promptId" in msg && "text" in msg) return "user-prompt";
@@ -173,6 +174,7 @@ const inferKind = (
 const looksLikeEvent = (msg: Record<string, unknown>): boolean => {
     if ("toolName" in msg) return true;
     if ("durationMs" in msg) return true;
+    if ("attachmentId" in msg && "promptId" in msg) return true;
     if ("promptId" in msg) return true;
     if ("text" in msg && typeof msg.text === "string") return true;
     if ("messageId" in msg && typeof msg.messageId === "string") return true;
@@ -205,9 +207,15 @@ export const unwrapEnvelope = (
         const data = asRecord(msg.data);
         if (data) {
             msg = {
+                // Preserve identity + the typed-event discriminator across
+                // the unwrap; otherwise stream envelopes like
+                // { stream_type, data: { type, data: {...inner} } } drop
+                // `type` after the second peel, which makes
+                // parseTypedCopilotEvent fall through and silently emit nothing.
                 ...("event" in msg ? { event: msg.event } : {}),
                 ...("uuid" in msg ? { uuid: msg.uuid } : {}),
                 ...("sessionId" in msg ? { sessionId: msg.sessionId } : {}),
+                ...("type" in msg ? { type: msg.type } : {}),
                 ...data,
             };
             continue;
@@ -219,6 +227,7 @@ export const unwrapEnvelope = (
                 ...("event" in msg ? { event: msg.event } : {}),
                 ...("uuid" in msg ? { uuid: msg.uuid } : {}),
                 ...("sessionId" in msg ? { sessionId: msg.sessionId } : {}),
+                ...("type" in msg ? { type: msg.type } : {}),
                 ...payload,
             };
             continue;
@@ -240,6 +249,19 @@ export const parseSingleEvent = (
     if (!kind) return null;
 
     switch (kind) {
+        case "attachment":
+            return {
+                kind: "attachment",
+                attachmentId: String(msg.attachmentId ?? ""),
+                promptId: String(msg.promptId ?? ""),
+                fileName: String(msg.fileName ?? ""),
+                mimeType: String(msg.mimeType ?? ""),
+                dataUrl: readString(msg.dataUrl),
+                path: readString(msg.path),
+                timestamp: String(msg.timestamp ?? ""),
+                harnessType,
+            };
+
         case "user-prompt":
             return {
                 kind: "user-prompt",

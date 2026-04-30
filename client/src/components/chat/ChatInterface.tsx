@@ -4,14 +4,17 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  Paperclip,
   Plus,
   Search,
   Settings,
   Sparkles,
   SquarePen,
   Trash2,
+  X,
 } from "lucide-react";
 import {
+  type ClipboardEvent,
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
@@ -25,7 +28,11 @@ import {
 import { toast } from "sonner";
 import { ConversationHistoryPanel } from "@/components/chat/ConversationHistoryPanel";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
-import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
+import {
+  type GroupedUserTurn,
+  TranscriptEventBubble,
+  UserTurnBubble,
+} from "@/components/chat/TranscriptEventBubble";
 import { IssuesPanel } from "@/components/chat/IssuesPanel";
 import { ConfirmationDialog } from "@/components/library/ConfirmationDialog";
 import { Badge } from "@/components/ui/badge";
@@ -58,12 +65,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAppContext } from "@/contexts/AppContext";
 import { cn } from "@/lib/utils";
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  normalizeImageAttachment,
+} from "@/lib/chatAttachments";
 import { buildIssuesRepairPrompt } from "@/lib/previewIssues";
 import { useAppDispatch, useAppSelector } from "@/store";
 import {
   type ChatMessage,
   type HarnessType,
+  type PendingAttachment,
   type PermissionMode,
+  addPendingAttachments,
+  removePendingAttachment,
   setEngineDisplayName,
   setEngineId,
   setHarnessType,
@@ -187,7 +201,13 @@ const MessageBubble = ({
  */
 export const ChatInterface = () => {
   const dispatch = useAppDispatch();
-  const { runPixel, runPixelAsync, getPixelAsyncResult, getPixelJobStreaming } =
+  const {
+    insightId,
+    runPixel,
+    runPixelAsync,
+    getPixelAsyncResult,
+    getPixelJobStreaming,
+  } =
     useAppContext();
   const {
     roomId,
@@ -198,6 +218,7 @@ export const ChatInterface = () => {
     permissionMode,
     harnessType,
     inputMessage,
+    pendingAttachments,
     messages,
     pendingMessageId,
   } = useAppSelector((state) => state.chat);
@@ -248,6 +269,7 @@ export const ChatInterface = () => {
   const [pendingHarnessType, setPendingHarnessType] =
     useState<HarnessType | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const previousMessageCountRef = useRef(0);
   const isPinnedToBottomRef = useRef(true);
@@ -278,6 +300,12 @@ export const ChatInterface = () => {
         message: ChatMessage;
       }
     | {
+        source: "user-turn";
+        createdAt: number | null;
+        key: string;
+        turn: GroupedUserTurn;
+      }
+    | {
         source: "transcript";
         createdAt: number | null;
         key: string;
@@ -286,6 +314,8 @@ export const ChatInterface = () => {
 
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [];
+    const userTurnsByPromptId = new Map<string, GroupedUserTurn>();
+
     for (const message of messages) {
       if (message.role === "user") {
         continue;
@@ -299,10 +329,61 @@ export const ChatInterface = () => {
     }
     transcriptEvents.forEach((event, index) => {
       const parsed = Date.parse(event.timestamp);
+      const createdAt = Number.isFinite(parsed) ? parsed : null;
+
+      if (event.kind === "user-prompt") {
+        const existingTurn = userTurnsByPromptId.get(event.promptId);
+        if (existingTurn) {
+          existingTurn.prompt = event;
+          existingTurn.timestamp = event.timestamp;
+          existingTurn.harnessType = event.harnessType;
+          return;
+        }
+
+        const turn: GroupedUserTurn = {
+          promptId: event.promptId,
+          prompt: event,
+          attachments: [],
+          timestamp: event.timestamp,
+          harnessType: event.harnessType,
+        };
+        userTurnsByPromptId.set(event.promptId, turn);
+        items.push({
+          source: "user-turn",
+          createdAt,
+          key: `user-turn:${event.promptId}`,
+          turn,
+        });
+        return;
+      }
+
+      if (event.kind === "attachment") {
+        const existingTurn = userTurnsByPromptId.get(event.promptId);
+        if (existingTurn) {
+          existingTurn.attachments.push(event);
+          return;
+        }
+
+        const turn: GroupedUserTurn = {
+          promptId: event.promptId,
+          attachments: [event],
+          timestamp: event.timestamp,
+          harnessType: event.harnessType,
+        };
+        userTurnsByPromptId.set(event.promptId, turn);
+        items.push({
+          source: "user-turn",
+          createdAt,
+          key: `user-turn:${event.promptId}`,
+          turn,
+        });
+        return;
+      }
+
       const stableKey = getTranscriptEventStableKey(event);
       items.push({
         source: "transcript",
-        createdAt: Number.isFinite(parsed) ? parsed : null,
+        createdAt,
         key: stableKey ?? `transcript-${event.kind}-${index}`,
         event,
       });
@@ -335,6 +416,7 @@ export const ChatInterface = () => {
     dispatch(
       submitAgentMessage({
         message: trimmedMessage,
+        insightId,
         runPixel,
         runPixelAsync,
         getPixelAsyncResult,
@@ -343,6 +425,7 @@ export const ChatInterface = () => {
     );
   }, [
     dispatch,
+    insightId,
     runPixel,
     runPixelAsync,
     getPixelAsyncResult,
@@ -392,6 +475,87 @@ export const ChatInterface = () => {
       dispatch(setInputMessage(event.target.value));
     },
     [dispatch],
+  );
+
+  const handleAddAttachments = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) {
+        return;
+      }
+
+      const remainingSlots =
+        MAX_ATTACHMENTS_PER_MESSAGE - pendingAttachments.length;
+      if (remainingSlots <= 0) {
+        toast.error(
+          `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images per message.`,
+        );
+        return;
+      }
+
+      const nextFiles = files.slice(0, remainingSlots);
+      if (files.length > nextFiles.length) {
+        toast.error(
+          `Only the first ${remainingSlots} image${remainingSlots === 1 ? "" : "s"} were added.`,
+        );
+      }
+
+      const normalized: PendingAttachment[] = [];
+      for (const file of nextFiles) {
+        try {
+          normalized.push(await normalizeImageAttachment(file));
+        } catch (error) {
+          console.error("Failed to normalize image attachment:", error);
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : `Failed to add ${file.name || "image"}.`,
+          );
+        }
+      }
+
+      if (normalized.length > 0) {
+        dispatch(addPendingAttachments(normalized));
+      }
+    },
+    [dispatch, pendingAttachments.length],
+  );
+
+  const handleAttachmentPickerChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files ? Array.from(event.target.files) : [];
+      await handleAddAttachments(files);
+      event.target.value = "";
+    },
+    [handleAddAttachments],
+  );
+
+  const handleOpenAttachmentPicker = useCallback(() => {
+    attachmentInputRef.current?.click();
+  }, []);
+
+  const handleRemovePendingAttachment = useCallback(
+    (attachmentId: string) => {
+      dispatch(removePendingAttachment(attachmentId));
+    },
+    [dispatch],
+  );
+
+  const handleMessagePaste = useCallback(
+    async (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const items = Array.from(event.clipboardData.items ?? []);
+      const imageFiles = items
+        .filter((item) => item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => Boolean(file));
+
+      if (imageFiles.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      await handleAddAttachments(imageFiles);
+    },
+    [handleAddAttachments],
   );
 
   const handleMessageKeyDown = useCallback(
@@ -1023,6 +1187,8 @@ export const ChatInterface = () => {
                   {timeline.map((item) =>
                     item.source === "message" ? (
                       <MessageBubble key={item.key} {...item.message} />
+                    ) : item.source === "user-turn" ? (
+                      <UserTurnBubble key={item.key} turn={item.turn} />
                     ) : (
                       <TranscriptEventBubble
                         key={item.key}
@@ -1041,16 +1207,62 @@ export const ChatInterface = () => {
             </div>
 
             <footer className="border-t border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-white/60 to-slate-50/40 px-4 py-4">
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/*"
+                multiple
+                className="hidden"
+                onChange={handleAttachmentPickerChange}
+              />
+              {pendingAttachments.length > 0 ? (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {pendingAttachments.map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      className="relative overflow-hidden rounded-2xl border border-slate-200/70 bg-white/90 p-2 shadow-sm dark:border-white/10 dark:bg-zinc-800/80"
+                    >
+                      <img
+                        src={attachment.dataUrl}
+                        alt="Pending image attachment"
+                        className="h-16 w-16 rounded-xl object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleRemovePendingAttachment(attachment.id)
+                        }
+                        className="absolute right-1.5 top-1.5 rounded-full bg-black/60 p-1 text-white transition hover:bg-black/75"
+                        aria-label="Remove image attachment"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                 <Textarea
-                  placeholder="Type a message…"
+                  placeholder="Type a message, then paste or attach images…"
                   rows={2}
                   ref={chatInputRef}
                   value={inputMessage}
                   onChange={handleMessageChange}
                   onKeyDown={handleMessageKeyDown}
+                  onPaste={handleMessagePaste}
                   className="min-h-[3.25rem] max-h-60 flex-1 resize-none border-slate-200/60 bg-white/90 dark:bg-zinc-800/70 focus-visible:ring-slate-400/30"
                 />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  disabled={isStreaming}
+                  onClick={handleOpenAttachmentPicker}
+                  title="Attach images"
+                  className="h-9 w-9 shrink-0 rounded-full"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </Button>
                 <Button
                   disabled={isSendDisabled}
                   onClick={handleSendMessage}

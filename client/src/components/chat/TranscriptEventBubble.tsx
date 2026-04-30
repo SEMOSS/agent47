@@ -1,6 +1,12 @@
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
+import {
+    Dialog,
+    DialogContent,
+    DialogTitle,
+} from "@/components/ui/dialog";
 import type {
     AssistantText,
+    AttachmentEvent,
     TranscriptHarness,
     ToolInvocation,
     ToolResult,
@@ -14,6 +20,7 @@ import {
     ChevronDown,
     ChevronRight,
     CircleDot,
+    ImageIcon,
     FileCode2,
     FileSearch,
     Loader2,
@@ -24,6 +31,14 @@ import {
     XCircle,
 } from "lucide-react";
 import { useState } from "react";
+
+export type GroupedUserTurn = {
+    promptId: string;
+    prompt?: UserPrompt;
+    attachments: AttachmentEvent[];
+    timestamp: string;
+    harnessType?: TranscriptHarness;
+};
 
 const formatTimestamp = (timestamp: string) => {
     try {
@@ -275,10 +290,37 @@ const AssistantMessageBubble = ({ event }: { event: AssistantText }) => (
     </div>
 );
 
+const ImagePreviewDialog = ({
+    open,
+    onOpenChange,
+    dataUrl,
+}: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    dataUrl?: string;
+}) => (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-3xl">
+            <DialogTitle className="sr-only">Image preview</DialogTitle>
+            {dataUrl ? (
+                <img
+                    src={dataUrl}
+                    alt="Expanded uploaded image attachment"
+                    className="max-h-[75vh] w-full rounded-xl object-contain"
+                />
+            ) : (
+                <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
+                    Preview unavailable for this attachment.
+                </div>
+            )}
+        </DialogContent>
+    </Dialog>
+);
+
 const UserPromptBubble = ({ event }: { event: UserPrompt }) => (
     <div className="flex flex-col gap-1 items-end">
         <span className="text-xs text-muted-foreground">
-            You {" \u00b7 "} {formatTimestamp(event.timestamp)}
+            You{" \u00b7 "}{formatTimestamp(event.timestamp)}
         </span>
         <div className="max-w-[75%] rounded-2xl px-4 py-3 text-sm bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md shadow-slate-500/15 dark:from-slate-600 dark:to-slate-700">
             <MarkdownRenderer content={event.text} />
@@ -286,12 +328,122 @@ const UserPromptBubble = ({ event }: { event: UserPrompt }) => (
     </div>
 );
 
+export const UserTurnBubble = ({ turn }: { turn: GroupedUserTurn }) => {
+    const [selectedAttachmentIndex, setSelectedAttachmentIndex] = useState<
+        number | null
+    >(null);
+    const selectedAttachment =
+        selectedAttachmentIndex === null
+            ? null
+            : turn.attachments[selectedAttachmentIndex] ?? null;
+
+    return (
+        <>
+            <div className="flex flex-col gap-1 items-end">
+                <span className="text-xs text-muted-foreground">
+                    You{" \u00b7 "}{formatTimestamp(turn.timestamp)}
+                </span>
+                <div className="flex max-w-[75%] flex-col gap-2 rounded-2xl bg-gradient-to-r from-slate-700 to-slate-800 px-3 py-3 text-white shadow-md shadow-slate-500/15 dark:from-slate-600 dark:to-slate-700">
+                    {turn.attachments.length > 0 ? (
+                        <div
+                            className={
+                                turn.attachments.length === 1
+                                    ? "grid grid-cols-1 gap-2"
+                                    : "grid grid-cols-2 gap-2"
+                            }
+                        >
+                            {turn.attachments.map((attachment, index) => (
+                                <button
+                                    key={attachment.attachmentId}
+                                    type="button"
+                                    onClick={() =>
+                                        setSelectedAttachmentIndex(index)
+                                    }
+                                    className="overflow-hidden rounded-xl border border-white/10 bg-white/10 text-left transition hover:border-white/20"
+                                    aria-label="Open image attachment"
+                                >
+                                    {attachment.dataUrl ? (
+                                        <img
+                                            src={attachment.dataUrl}
+                                            alt="Uploaded image attachment"
+                                            className="max-h-64 w-full object-cover"
+                                        />
+                                    ) : (
+                                        <div className="flex h-24 w-full items-center justify-center bg-white/10 text-white/80">
+                                            <ImageIcon className="h-5 w-5" />
+                                        </div>
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+                    ) : null}
+                    {turn.prompt?.text ? (
+                        <div className="text-sm">
+                            <MarkdownRenderer content={turn.prompt.text} />
+                        </div>
+                    ) : null}
+                </div>
+            </div>
+
+            <ImagePreviewDialog
+                open={selectedAttachment !== null}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setSelectedAttachmentIndex(null);
+                    }
+                }}
+                dataUrl={selectedAttachment?.dataUrl}
+            />
+        </>
+    );
+};
+
+const AttachmentBubble = ({ event }: { event: AttachmentEvent }) => {
+    const [open, setOpen] = useState(false);
+
+    return (
+        <>
+            <div className="flex flex-col gap-1 items-end">
+                <span className="text-xs text-muted-foreground">
+                    You{" \u00b7 "}{formatTimestamp(event.timestamp)}
+                </span>
+                <button
+                    type="button"
+                    onClick={() => setOpen(true)}
+                    className="max-w-[75%] overflow-hidden rounded-2xl border border-slate-200/60 bg-white/90 p-2 text-left shadow-sm transition hover:border-slate-300 dark:border-white/10 dark:bg-zinc-800/70"
+                    aria-label="Open image attachment"
+                >
+                    {event.dataUrl ? (
+                        <img
+                            src={event.dataUrl}
+                            alt="Uploaded image attachment"
+                            className="max-h-56 rounded-xl object-cover"
+                        />
+                    ) : (
+                        <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-slate-100 text-slate-500 dark:bg-zinc-700 dark:text-zinc-200">
+                            <ImageIcon className="h-5 w-5" />
+                        </div>
+                    )}
+                </button>
+            </div>
+
+            <ImagePreviewDialog
+                open={open}
+                onOpenChange={setOpen}
+                dataUrl={event.dataUrl}
+            />
+        </>
+    );
+};
+
 export const TranscriptEventBubble = ({
     event,
 }: {
     event: TranscriptEvent;
 }) => {
     switch (event.kind) {
+        case "attachment":
+            return <AttachmentBubble event={event} />;
         case "tool-invocation":
             return <ToolInvocationBubble event={event} />;
         case "tool-result":

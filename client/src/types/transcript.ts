@@ -26,6 +26,18 @@ export type UserPrompt = {
     harnessType?: TranscriptHarness;
 };
 
+export type AttachmentEvent = {
+    kind: "attachment";
+    attachmentId: string;
+    promptId: string;
+    fileName: string;
+    mimeType: string;
+    dataUrl?: string;
+    path?: string;
+    timestamp: string;
+    harnessType?: TranscriptHarness;
+};
+
 export type ToolInvocation = {
     kind: "tool-invocation";
     toolUseId: string;
@@ -75,6 +87,7 @@ export type ToolResult = {
 };
 
 export type TranscriptEvent =
+    | AttachmentEvent
     | UserPrompt
     | ToolInvocation
     | AssistantText
@@ -84,6 +97,10 @@ export const getTranscriptEventStableKey = (
     event: TranscriptEvent,
 ): string | null => {
     switch (event.kind) {
+        case "attachment":
+            return event.attachmentId && event.promptId
+                ? `attachment:${event.promptId}:${event.attachmentId}`
+                : null;
         case "user-prompt":
             return event.promptId
                 ? `user-prompt:${event.promptId}`
