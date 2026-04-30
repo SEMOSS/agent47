@@ -1,6 +1,12 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { upload as uploadInsightAsset } from "@semoss/sdk";
+import { v4 as uuidv4 } from "uuid";
 import { parseTranscriptMessage } from "@/lib/parseTranscriptMessage";
+import {
+  createSetRoomForInsightPixel,
+  sanitizeInsightFilePath,
+  sanitizePixelArg,
+} from "@/lib/pixelHelpers";
 import type { StreamingResponse } from "@/contexts/AppContext";
 import {
   type PendingAttachment,
@@ -30,8 +36,6 @@ type GetPixelAsyncResultFn = <O extends unknown[] | []>(
 }>;
 type GetPixelJobStreamingFn = (jobId: string) => Promise<StreamingResponse>;
 
-const sanitizePixelArg = (value: string) => value.replace(/'/g, '"');
-
 interface MCPDetails {
   id: string;
   name: string;
@@ -53,9 +57,6 @@ const sanitizeFileName = (value: string) =>
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "") || "image.png";
-
-const normalizeRelativeInsightPath = (value: string) =>
-  value.replace(/\\/g, "/").replace(/^\/+/, "");
 
 const dataUrlToBlob = async (dataUrl: string): Promise<Blob> => {
   const response = await fetch(dataUrl);
@@ -94,9 +95,6 @@ const createUpdateRoomOptionsPixel = (
     : "";
   return `UpdateRoomOptions(roomId='${roomId}', roomOptions=[{"instructions":'${safeInstructions}', "modelId":'${model}', "harnessType":'${harnessType}', "mcp":[${mcpStrings.join(",")}]${targetProjectPart} }] )`;
 };
-
-const createSetRoomForInsightPixel = (roomId: string) =>
-  `SetRoomForInsight(roomId='${roomId}');`;
 
 const createEnsureRoomInsightBoundPixel = (
   roomId: string,
@@ -199,7 +197,7 @@ const uploadInsightAttachments = async (
         attachment.fileName,
         attachment.mimeType,
       );
-      const attachmentId = crypto.randomUUID();
+      const attachmentId = uuidv4();
       const uploadFileName = `${attachmentId}.${extension}`;
       const blob = await dataUrlToBlob(attachment.dataUrl);
 
@@ -232,7 +230,7 @@ const uploadInsightAttachments = async (
     if (item.fileName && item.fileLocation) {
       uploadedPathByName.set(
         item.fileName,
-        normalizeRelativeInsightPath(item.fileLocation),
+        sanitizeInsightFilePath(item.fileLocation),
       );
     }
   });
@@ -298,21 +296,23 @@ export const runAgentHarness = createAsyncThunk<
         type: x.type,
       }));
 
-      await ensureRoomInsightBound(
-        chat.roomId,
-        selectEffectiveSystemPrompt({ chat }),
-        selectedMcps,
-        chat.engineId,
-        chat.harnessType,
-        runPixel,
-        targetProjectId || undefined,
-      );
-
+      // Bind the room+insight and upload any image attachments concurrently;
+      // they have no data dependency on each other.
       const safeMessage = sanitizePixelArg(message);
-      const uploadedAttachments =
+      const [, uploadedAttachments] = await Promise.all([
+        ensureRoomInsightBound(
+          chat.roomId,
+          selectEffectiveSystemPrompt({ chat }),
+          selectedMcps,
+          chat.engineId,
+          chat.harnessType,
+          runPixel,
+          targetProjectId || undefined,
+        ),
         attachments.length === 0
-          ? []
-          : await uploadInsightAttachments(promptId, attachments, insightId);
+          ? Promise.resolve([] as UploadedRoomAttachment[])
+          : uploadInsightAttachments(promptId, attachments, insightId),
+      ]);
 
       uploadedAttachments.forEach((uploadedAttachment, index) => {
         const matchingDraft = attachments[index];

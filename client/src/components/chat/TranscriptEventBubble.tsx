@@ -290,10 +290,37 @@ const AssistantMessageBubble = ({ event }: { event: AssistantText }) => (
     </div>
 );
 
+const ImagePreviewDialog = ({
+    open,
+    onOpenChange,
+    dataUrl,
+}: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    dataUrl?: string;
+}) => (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-3xl">
+            <DialogTitle className="sr-only">Image preview</DialogTitle>
+            {dataUrl ? (
+                <img
+                    src={dataUrl}
+                    alt="Expanded uploaded image attachment"
+                    className="max-h-[75vh] w-full rounded-xl object-contain"
+                />
+            ) : (
+                <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
+                    Preview unavailable for this attachment.
+                </div>
+            )}
+        </DialogContent>
+    </Dialog>
+);
+
 const UserPromptBubble = ({ event }: { event: UserPrompt }) => (
     <div className="flex flex-col gap-1 items-end">
         <span className="text-xs text-muted-foreground">
-            You {" \u00b7 "} {formatTimestamp(event.timestamp)}
+            You \u00b7 {formatTimestamp(event.timestamp)}
         </span>
         <div className="max-w-[75%] rounded-2xl px-4 py-3 text-sm bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md shadow-slate-500/15 dark:from-slate-600 dark:to-slate-700">
             <MarkdownRenderer content={event.text} />
@@ -314,7 +341,7 @@ export const UserTurnBubble = ({ turn }: { turn: GroupedUserTurn }) => {
         <>
             <div className="flex flex-col gap-1 items-end">
                 <span className="text-xs text-muted-foreground">
-                    You {" \u00b7 "} {formatTimestamp(turn.timestamp)}
+                    You \u00b7 {formatTimestamp(turn.timestamp)}
                 </span>
                 <div className="flex max-w-[75%] flex-col gap-2 rounded-2xl bg-gradient-to-r from-slate-700 to-slate-800 px-3 py-3 text-white shadow-md shadow-slate-500/15 dark:from-slate-600 dark:to-slate-700">
                     {turn.attachments.length > 0 ? (
@@ -358,29 +385,15 @@ export const UserTurnBubble = ({ turn }: { turn: GroupedUserTurn }) => {
                 </div>
             </div>
 
-            <Dialog
+            <ImagePreviewDialog
                 open={selectedAttachment !== null}
                 onOpenChange={(open) => {
                     if (!open) {
                         setSelectedAttachmentIndex(null);
                     }
                 }}
-            >
-                <DialogContent className="max-w-3xl">
-                    <DialogTitle className="sr-only">Image preview</DialogTitle>
-                    {selectedAttachment?.dataUrl ? (
-                        <img
-                            src={selectedAttachment.dataUrl}
-                            alt="Expanded uploaded image attachment"
-                            className="max-h-[75vh] w-full rounded-xl object-contain"
-                        />
-                    ) : (
-                        <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
-                            Preview unavailable for this attachment.
-                        </div>
-                    )}
-                </DialogContent>
-            </Dialog>
+                dataUrl={selectedAttachment?.dataUrl}
+            />
         </>
     );
 };
@@ -392,7 +405,7 @@ const AttachmentBubble = ({ event }: { event: AttachmentEvent }) => {
         <>
             <div className="flex flex-col gap-1 items-end">
                 <span className="text-xs text-muted-foreground">
-                    You {" \u00b7 "} {formatTimestamp(event.timestamp)}
+                    You \u00b7 {formatTimestamp(event.timestamp)}
                 </span>
                 <button
                     type="button"
@@ -414,22 +427,11 @@ const AttachmentBubble = ({ event }: { event: AttachmentEvent }) => {
                 </button>
             </div>
 
-            <Dialog open={open} onOpenChange={setOpen}>
-                <DialogContent className="max-w-3xl">
-                    <DialogTitle className="sr-only">Image preview</DialogTitle>
-                    {event.dataUrl ? (
-                        <img
-                            src={event.dataUrl}
-                            alt="Expanded uploaded image attachment"
-                            className="max-h-[75vh] w-full rounded-xl object-contain"
-                        />
-                    ) : (
-                        <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
-                            Preview unavailable for this attachment.
-                        </div>
-                    )}
-                </DialogContent>
-            </Dialog>
+            <ImagePreviewDialog
+                open={open}
+                onOpenChange={setOpen}
+                dataUrl={event.dataUrl}
+            />
         </>
     );
 };

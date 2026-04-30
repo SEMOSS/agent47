@@ -238,14 +238,18 @@ const chatSlice = createSlice({
       state,
       action: PayloadAction<PendingAttachment[]>,
     ) {
+      if (action.payload.length === 0) return;
       state.pendingAttachments.push(...action.payload);
     },
     removePendingAttachment(state, action: PayloadAction<string>) {
-      state.pendingAttachments = state.pendingAttachments.filter(
-        (attachment) => attachment.id !== action.payload,
+      const index = state.pendingAttachments.findIndex(
+        (attachment) => attachment.id === action.payload,
       );
+      if (index === -1) return;
+      state.pendingAttachments.splice(index, 1);
     },
     clearPendingAttachments(state) {
+      if (state.pendingAttachments.length === 0) return;
       state.pendingAttachments = [];
     },
     bumpIframeRefresh(state) {

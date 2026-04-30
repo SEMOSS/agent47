@@ -1,5 +1,10 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { parseTranscriptMessage } from "@/lib/parseTranscriptMessage";
+import {
+  createSetRoomForInsightPixel,
+  sanitizeInsightFilePath,
+  sanitizePixelArg,
+} from "@/lib/pixelHelpers";
 import type { TranscriptEvent } from "@/types/transcript";
 import {
   type ChatState,
@@ -15,7 +20,6 @@ import {
 import { clearTranscript, setTranscriptEvents } from "../slices/transcriptSlice";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
-const sanitizePixelArg = (value: string) => value.replace(/'/g, '"');
 
 type RawRoom = {
   ROOM_ID?: string;
@@ -29,9 +33,6 @@ type RoomOptions = {
   harnessType?: string;
   targetProjectId?: string;
 };
-
-const createSetRoomForInsightPixel = (roomId: string) =>
-  `SetRoomForInsight(roomId='${roomId}');`;
 
 const readHarnessType = (
   value: unknown,
@@ -203,9 +204,6 @@ const inferHistoryFromRoom = async (
   };
 };
 
-const sanitizeInsightFilePath = (value: string) =>
-  value.replace(/\\/g, "/").replace(/^\/+/, "");
-
 const toDataUrl = (mimeType: string, value: string) =>
   value.startsWith("data:")
     ? value
@@ -214,8 +212,8 @@ const toDataUrl = (mimeType: string, value: string) =>
 const hydrateAttachmentPreviews = async (
   events: TranscriptEvent[],
   runPixel: RunPixelFn,
-): Promise<TranscriptEvent[]> => {
-  const hydratedEvents = await Promise.all(
+): Promise<TranscriptEvent[]> =>
+  Promise.all(
     events.map(async (event) => {
       if (event.kind !== "attachment" || event.dataUrl || !event.path) {
         return event;
@@ -246,9 +244,6 @@ const hydrateAttachmentPreviews = async (
       }
     }),
   );
-
-  return sortHistoryEvents(hydratedEvents);
-};
 
 export const loadConversationHistory = createAsyncThunk<
   ConversationRoom[],

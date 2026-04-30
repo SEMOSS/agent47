@@ -77,7 +77,6 @@ import {
   type PendingAttachment,
   type PermissionMode,
   addPendingAttachments,
-  clearPendingAttachments,
   removePendingAttachment,
   setEngineDisplayName,
   setEngineId,
@@ -278,7 +277,6 @@ export const ChatInterface = () => {
   const fetchedSkillsProjectIdRef = useRef<string | null>(null);
   const trimmedMessage = inputMessage.trim();
   const isStreaming = pendingMessageId !== null;
-  const imageAttachmentsEnabled = true;
   const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
   const activeHarnessLabel = getHarnessLabel(harnessType);
   const selectedMcpIds = useMemo(
