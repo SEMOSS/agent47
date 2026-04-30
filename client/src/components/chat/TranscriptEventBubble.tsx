@@ -1,6 +1,12 @@
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
+import {
+    Dialog,
+    DialogContent,
+    DialogTitle,
+} from "@/components/ui/dialog";
 import type {
     AssistantText,
+    AttachmentEvent,
     TranscriptHarness,
     ToolInvocation,
     ToolResult,
@@ -14,6 +20,7 @@ import {
     ChevronDown,
     ChevronRight,
     CircleDot,
+    ImageIcon,
     FileCode2,
     FileSearch,
     Loader2,
@@ -286,12 +293,63 @@ const UserPromptBubble = ({ event }: { event: UserPrompt }) => (
     </div>
 );
 
+const AttachmentBubble = ({ event }: { event: AttachmentEvent }) => {
+    const [open, setOpen] = useState(false);
+
+    return (
+        <>
+            <div className="flex flex-col gap-1 items-end">
+                <span className="text-xs text-muted-foreground">
+                    You {" \u00b7 "} {formatTimestamp(event.timestamp)}
+                </span>
+                <button
+                    type="button"
+                    onClick={() => setOpen(true)}
+                    className="max-w-[75%] overflow-hidden rounded-2xl border border-slate-200/60 bg-white/90 p-2 text-left shadow-sm transition hover:border-slate-300 dark:border-white/10 dark:bg-zinc-800/70"
+                    aria-label="Open image attachment"
+                >
+                    {event.dataUrl ? (
+                        <img
+                            src={event.dataUrl}
+                            alt="Uploaded image attachment"
+                            className="max-h-56 rounded-xl object-cover"
+                        />
+                    ) : (
+                        <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-slate-100 text-slate-500 dark:bg-zinc-700 dark:text-zinc-200">
+                            <ImageIcon className="h-5 w-5" />
+                        </div>
+                    )}
+                </button>
+            </div>
+
+            <Dialog open={open} onOpenChange={setOpen}>
+                <DialogContent className="max-w-3xl">
+                    <DialogTitle className="sr-only">Image preview</DialogTitle>
+                    {event.dataUrl ? (
+                        <img
+                            src={event.dataUrl}
+                            alt="Expanded uploaded image attachment"
+                            className="max-h-[75vh] w-full rounded-xl object-contain"
+                        />
+                    ) : (
+                        <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
+                            Preview unavailable for this attachment.
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+        </>
+    );
+};
+
 export const TranscriptEventBubble = ({
     event,
 }: {
     event: TranscriptEvent;
 }) => {
     switch (event.kind) {
+        case "attachment":
+            return <AttachmentBubble event={event} />;
         case "tool-invocation":
             return <ToolInvocationBubble event={event} />;
         case "tool-result":

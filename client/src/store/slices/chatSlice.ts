@@ -22,6 +22,16 @@ export type ChatMessage = {
   status?: "loading" | "streaming" | "complete" | "error";
 };
 
+export type PendingAttachment = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  dataUrl: string;
+  byteSize: number;
+  width?: number;
+  height?: number;
+};
+
 export type PermissionMode =
   | "default"
   | "acceptEdits"
@@ -39,6 +49,7 @@ export interface ChatState {
   permissionMode: PermissionMode;
   harnessType: HarnessType;
   inputMessage: string;
+  pendingAttachments: PendingAttachment[];
   messages: ChatMessage[];
   pendingMessageId: string | null;
   iframeRefreshKey: number;
@@ -129,6 +140,7 @@ const initialState: ChatState = {
   permissionMode: "acceptEdits",
   harnessType: loadInitialHarnessType(),
   inputMessage: "",
+  pendingAttachments: [],
   messages: [],
   pendingMessageId: null,
   iframeRefreshKey: 0,
@@ -162,6 +174,7 @@ const chatSlice = createSlice({
   reducers: {
     setRoomId(state, action: PayloadAction<string>) {
       state.roomId = action.payload;
+      state.pendingAttachments = [];
       if (state.projectId && action.payload) {
         writeLastRoomId(state.projectId, action.payload);
       }
@@ -172,6 +185,7 @@ const chatSlice = createSlice({
       state.messages = [];
       state.pendingMessageId = null;
       state.inputMessage = "";
+      state.pendingAttachments = [];
       if (state.projectId) {
         writeLastRoomId(state.projectId, nextRoomId);
       }
@@ -212,12 +226,27 @@ const chatSlice = createSlice({
       state.messages = [];
       state.pendingMessageId = null;
       state.inputMessage = "";
+      state.pendingAttachments = [];
       state.conversationList = [];
       state.isLoadingConversations = false;
       writeLocalStorage(LAST_PROJECT_ID_KEY, nextProjectId);
     },
     setInputMessage(state, action: PayloadAction<string>) {
       state.inputMessage = action.payload;
+    },
+    addPendingAttachments(
+      state,
+      action: PayloadAction<PendingAttachment[]>,
+    ) {
+      state.pendingAttachments.push(...action.payload);
+    },
+    removePendingAttachment(state, action: PayloadAction<string>) {
+      state.pendingAttachments = state.pendingAttachments.filter(
+        (attachment) => attachment.id !== action.payload,
+      );
+    },
+    clearPendingAttachments(state) {
+      state.pendingAttachments = [];
     },
     bumpIframeRefresh(state) {
       state.iframeRefreshKey += 1;
@@ -312,6 +341,7 @@ const chatSlice = createSlice({
       state.messages = [];
       state.pendingMessageId = null;
       state.inputMessage = "";
+      state.pendingAttachments = [];
       state.conversationList = [];
       state.isLoadingConversations = false;
       writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload.projectId);
@@ -324,6 +354,7 @@ const chatSlice = createSlice({
       state.messages = [];
       state.pendingMessageId = null;
       state.inputMessage = "";
+      state.pendingAttachments = [];
       state.conversationList = [];
       state.isLoadingConversations = false;
       writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload.projectId);
@@ -343,6 +374,9 @@ export const {
   setHarnessType,
   setActiveProject,
   setInputMessage,
+  addPendingAttachments,
+  removePendingAttachment,
+  clearPendingAttachments,
   bumpIframeRefresh,
   setConversationList,
   updateConversationRoomName,

@@ -2,6 +2,7 @@ import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import {
     getTranscriptEventStableKey,
     type AssistantText,
+    type AttachmentEvent,
     type TranscriptEvent,
     type ToolInvocation,
     type ToolResult,
@@ -117,6 +118,12 @@ const mergeTranscriptEvent = (
     };
 
     switch (incoming.kind) {
+        case "attachment":
+            return {
+                ...existing,
+                ...incoming,
+                timestamp,
+            } as AttachmentEvent;
         case "assistant-text":
             return {
                 ...existing,
