@@ -74,11 +74,38 @@ export type ToolResult = {
     harnessType?: TranscriptHarness;
 };
 
+export type MaxTurnsReached = {
+    kind: "max-turns-reached";
+    uuid: string;
+    sessionId?: string;
+    maxTurns: number;
+    turnCount: number;
+    timestamp: string;
+    harnessType?: TranscriptHarness;
+};
+
+export type AgentResult = {
+    kind: "agent-result";
+    uuid: string;
+    sessionId?: string;
+    subtype?: string;
+    isError?: boolean;
+    numTurns?: number;
+    stopReason?: string;
+    totalCostUsd?: number;
+    durationMs?: number;
+    errors?: string[];
+    timestamp: string;
+    harnessType?: TranscriptHarness;
+};
+
 export type TranscriptEvent =
     | UserPrompt
     | ToolInvocation
     | AssistantText
-    | ToolResult;
+    | ToolResult
+    | MaxTurnsReached
+    | AgentResult;
 
 export const getTranscriptEventStableKey = (
     event: TranscriptEvent,
@@ -99,6 +126,14 @@ export const getTranscriptEventStableKey = (
         case "tool-result":
             return event.toolUseId
                 ? `tool-result:${event.toolUseId}`
+                : null;
+        case "max-turns-reached":
+            return event.uuid
+                ? `max-turns-reached:${event.uuid}`
+                : null;
+        case "agent-result":
+            return event.uuid
+                ? `agent-result:${event.uuid}`
                 : null;
         default:
             return null;

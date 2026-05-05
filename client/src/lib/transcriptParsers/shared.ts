@@ -163,6 +163,8 @@ export const extractToolResultContent = (
 const inferKind = (
     msg: UnknownRecord,
 ): TranscriptEvent["kind"] | null => {
+    if (msg.event === "max_turns_reached") return "max-turns-reached";
+    if (msg.event === "result") return "agent-result";
     if ("durationMs" in msg) return "tool-result";
     if ("toolName" in msg) return "tool-invocation";
     if ("promptId" in msg && "text" in msg) return "user-prompt";
@@ -286,6 +288,49 @@ export const parseSingleEvent = (
                 timestamp: String(msg.timestamp ?? ""),
                 harnessType,
             };
+
+        case "max-turns-reached":
+            return {
+                kind: "max-turns-reached",
+                uuid: String(msg.uuid ?? ""),
+                sessionId: readString(msg.sessionId),
+                maxTurns: readNumber(msg.maxTurns),
+                turnCount: readNumber(msg.turnCount),
+                timestamp: String(msg.timestamp ?? ""),
+                harnessType,
+            };
+
+        case "agent-result": {
+            const errorsRaw = msg.errors;
+            const errors = Array.isArray(errorsRaw)
+                ? errorsRaw.filter(
+                      (item): item is string => typeof item === "string",
+                  )
+                : undefined;
+            return {
+                kind: "agent-result",
+                uuid: String(msg.uuid ?? ""),
+                sessionId: readString(msg.sessionId),
+                subtype: readString(msg.subtype),
+                isError: readBoolean(msg.isError),
+                numTurns:
+                    typeof msg.numTurns === "number"
+                        ? msg.numTurns
+                        : undefined,
+                stopReason: readString(msg.stopReason),
+                totalCostUsd:
+                    typeof msg.totalCostUsd === "number"
+                        ? msg.totalCostUsd
+                        : undefined,
+                durationMs:
+                    typeof msg.durationMs === "number"
+                        ? msg.durationMs
+                        : undefined,
+                errors: errors && errors.length > 0 ? errors : undefined,
+                timestamp: String(msg.timestamp ?? ""),
+                harnessType,
+            };
+        }
 
         case "tool-result": {
             if (isInternalTool(readString(msg.toolName))) {

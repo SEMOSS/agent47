@@ -1,6 +1,8 @@
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import type {
+    AgentResult,
     AssistantText,
+    MaxTurnsReached,
     TranscriptHarness,
     ToolInvocation,
     ToolResult,
@@ -17,6 +19,7 @@ import {
     FileCode2,
     FileSearch,
     Loader2,
+    OctagonX,
     Pencil,
     Sparkles,
     Terminal,
@@ -45,6 +48,15 @@ const shortenPath = (filePath: string, maxParts = 3): string => {
 const formatDuration = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
     return `${(ms / 1000).toFixed(1)}s`;
+};
+
+const formatLongDuration = (ms: number) => {
+    if (ms < 1000) return `${ms}ms`;
+    const totalSeconds = Math.round(ms / 1000);
+    if (totalSeconds < 60) return `${totalSeconds}s`;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
 };
 
 const TOOL_ICONS: Record<string, typeof Wrench> = {
@@ -266,7 +278,7 @@ const AssistantMessageBubble = ({ event }: { event: AssistantText }) => (
             {" \u00b7 "}
             {formatTimestamp(event.timestamp)}
         </span>
-        <div className="max-w-[75%] rounded-2xl px-4 py-3 text-sm bg-white/90 dark:bg-zinc-800/70 text-foreground border border-slate-200/50 dark:border-white/10 shadow-sm">
+        <div className="max-w-[75%] rounded-2xl px-4 py-3 text-sm bg-gradient-to-br from-white to-slate-100 dark:from-zinc-700/80 dark:to-zinc-900/80 text-foreground border border-slate-200/50 dark:border-white/10 shadow-sm">
             <MarkdownRenderer content={event.text} />
             {event.isPartial ? (
                 <span className="inline-block ml-1 h-3 w-0.5 animate-pulse bg-foreground/60" />
@@ -274,6 +286,73 @@ const AssistantMessageBubble = ({ event }: { event: AssistantText }) => (
         </div>
     </div>
 );
+
+const MaxTurnsReachedBubble = ({ event }: { event: MaxTurnsReached }) => (
+    <div className="flex flex-col gap-1 items-start w-full">
+        <div className="flex items-start gap-2.5 w-full max-w-[75%] rounded-xl border border-amber-300/60 dark:border-amber-500/30 bg-amber-50/80 dark:bg-amber-950/30 px-3 py-2.5 text-xs">
+            <OctagonX className="h-3.5 w-3.5 shrink-0 mt-0.5 text-amber-500 dark:text-amber-400" />
+            <div className="min-w-0 flex-1">
+                <p className="font-medium text-amber-800 dark:text-amber-300">
+                    Max turns reached
+                </p>
+                <p className="mt-0.5 text-amber-700/80 dark:text-amber-400/70">
+                    This message reached the limit of {event.maxTurns} turn
+                    {event.maxTurns !== 1 ? "s" : ""}. Type &ldquo;continue&rdquo; to
+                    continue development.
+                </p>
+            </div>
+            <span className="shrink-0 text-[10px] text-amber-600/60 dark:text-amber-400/50">
+                {formatTimestamp(event.timestamp)}
+            </span>
+        </div>
+    </div>
+);
+
+const AgentResultBubble = ({ event }: { event: AgentResult }) => {
+    const isError = event.isError === true;
+    const errors = isError && event.errors ? event.errors : undefined;
+
+    const parts: string[] = [];
+    if (typeof event.numTurns === "number") {
+        parts.push(
+            `${event.numTurns} turn${event.numTurns !== 1 ? "s" : ""}`,
+        );
+    }
+    if (typeof event.durationMs === "number") {
+        parts.push(formatLongDuration(event.durationMs));
+    }
+
+    const hasErrors = !!errors && errors.length > 0;
+
+    if (parts.length === 0 && !hasErrors) {
+        return null;
+    }
+
+    const StatusIcon = isError ? CircleDot : CheckCircle2;
+    const statusColor = isError ? "text-amber-500" : "text-emerald-500";
+
+    return (
+        <div className="flex w-full flex-col items-start gap-1 py-1">
+            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                <StatusIcon className={`h-3 w-3 ${statusColor}`} />
+                {parts.length > 0 && <span>{parts.join(" · ")}</span>}
+                {parts.length > 0 && (
+                    <span className="text-muted-foreground/50">{"·"}</span>
+                )}
+                <span className="text-muted-foreground/50">
+                    {formatTimestamp(event.timestamp)}
+                </span>
+            </div>
+            {hasErrors && (
+                <ul className="flex flex-col items-start gap-0.5 pl-4.5 text-[11px] text-amber-600 dark:text-amber-400/80">
+                    {errors.map((message, index) => (
+                        <li key={`${index}-${message}`}>{message}</li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+};
 
 const UserPromptBubble = ({ event }: { event: UserPrompt }) => (
     <div className="flex flex-col gap-1 items-end">
@@ -304,6 +383,10 @@ export const TranscriptEventBubble = ({
             );
         case "user-prompt":
             return <UserPromptBubble event={event} />;
+        case "max-turns-reached":
+            return <MaxTurnsReachedBubble event={event} />;
+        case "agent-result":
+            return <AgentResultBubble event={event} />;
         default:
             return null;
     }
