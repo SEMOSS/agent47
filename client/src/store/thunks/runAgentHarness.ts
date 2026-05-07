@@ -9,6 +9,7 @@ import {
 import type { MCPState } from "../slices/mcpSlice";
 import type { EnginesState } from "../slices/enginesSlice";
 import { addTranscriptEvent } from "../slices/transcriptSlice";
+import { fetchCommitHistory } from "../slices/gitSlice";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
 type RunPixelAsyncFn = (pixelString: string) => Promise<{ jobId: string }>;
@@ -238,6 +239,17 @@ export const runAgentHarness = createAsyncThunk<
       // }
 
       dispatch({ type: "chat/bumpIframeRefresh" });
+
+      if (targetProjectId) {
+        dispatch(
+          fetchCommitHistory({
+            projectId: targetProjectId,
+            runPixel: runPixel as <T = unknown>(p: string) => Promise<T>,
+            offset: 0,
+            append: false,
+          }),
+        );
+      }
 
       return { response: finalResponse ?? "" };
     } catch (error) {
