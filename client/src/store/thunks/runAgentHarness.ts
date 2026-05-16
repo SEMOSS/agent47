@@ -8,7 +8,10 @@ import {
 } from "../slices/chatSlice";
 import type { MCPState } from "../slices/mcpSlice";
 import type { EnginesState } from "../slices/enginesSlice";
-import { addTranscriptEvent } from "../slices/transcriptSlice";
+import {
+  addTranscriptEvent,
+  type TranscriptState,
+} from "../slices/transcriptSlice";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
 type RunPixelAsyncFn = (pixelString: string) => Promise<{ jobId: string }>;
@@ -97,6 +100,32 @@ export const updateRoomOptions = createAsyncThunk<
 const TERMINAL_STATUSES = new Set(["ProgressComplete", "Complete", "Error"]);
 const POLLING_INTERVAL_MS = 300;
 
+const createSemossFallbackTranscriptEvents = (
+  roomId: string,
+  message: string,
+  response: string,
+) => {
+  const timestamp = new Date().toISOString();
+  const idBase = `semoss-${roomId}-${Date.now()}`;
+
+  return [
+    {
+      kind: "user-prompt" as const,
+      promptId: `${idBase}-user`,
+      text: message,
+      timestamp,
+      harnessType: "semoss" as const,
+    },
+    {
+      kind: "assistant-text" as const,
+      eventId: `${idBase}-assistant`,
+      text: response,
+      timestamp,
+      harnessType: "semoss" as const,
+    },
+  ];
+};
+
 export const runAgentHarness = createAsyncThunk<
   { response: string },
   {
@@ -109,7 +138,7 @@ export const runAgentHarness = createAsyncThunk<
     projectId?: string;
     engineId?: string;
   },
-  { rejectValue: string; state: { chat: ChatState; mcp: MCPState; engines: EnginesState } }
+  { rejectValue: string; state: { chat: ChatState; mcp: MCPState; engines: EnginesState; transcript: TranscriptState } }
 >(
   "chat/runAgentHarness",
   async (
@@ -127,6 +156,7 @@ export const runAgentHarness = createAsyncThunk<
     try {
       const { chat, mcp, engines } = getState();
       const targetProjectId = projectId ?? chat.projectId;
+      const initialTranscriptEventCount = getState().transcript.events.length;
 
       const selectedMcps: MCPDetails[] = mcp.selectedMcps.map((x) => ({
         id: x.id,
@@ -151,7 +181,9 @@ export const runAgentHarness = createAsyncThunk<
         permissionMode: chat.permissionMode,
       };
 
-      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='<encode>${safeMessage}</encode>', harnessType="${chat.harnessType}", maxReflections=20, paramValues=[${JSON.stringify(paramMap)}]) ;`;
+      const maxTurnsPart =
+        chat.harnessType === "semoss" ? ", maxTurns=30" : "";
+      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='<encode>${safeMessage}</encode>', harnessType="${chat.harnessType}"${maxTurnsPart}, paramValues=[${JSON.stringify(paramMap)}]) ;`;
 
       const { jobId } = await runPixelAsync(pixelString);
 
@@ -206,6 +238,19 @@ export const runAgentHarness = createAsyncThunk<
         result.results.length > 1
           ? (result.results[1].output as string)
           : (result.results[0].output as string);
+
+      if (
+        chat.harnessType === "semoss" &&
+        getState().transcript.events.length === initialTranscriptEventCount
+      ) {
+        for (const event of createSemossFallbackTranscriptEvents(
+          chat.roomId,
+          message,
+          String(finalResponse ?? ""),
+        )) {
+          dispatch(addTranscriptEvent(event));
+        }
+      }
 
       if (shouldGenerateRoomName) {
         try {

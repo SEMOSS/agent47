@@ -59,6 +59,9 @@ export const readToolUseId = (msg: UnknownRecord): string =>
 export const isNonEmptyString = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0;
 
+const readRecord = (value: unknown): Record<string, unknown> | undefined =>
+    asRecord(value) ?? undefined;
+
 export const isInternalTool = (toolName: string | undefined): boolean =>
     toolName === "report_intent";
 
@@ -132,7 +135,7 @@ export const extractToolDetailedContent = (
 export const extractToolResultContent = (
     msg: UnknownRecord,
 ): string | undefined => {
-    const directContent = readString(msg.content);
+    const directContent = readString(msg.content ?? msg.output);
     if (directContent) {
         return directContent;
     }
@@ -261,9 +264,11 @@ export const parseSingleEvent = (
                 eventId: readEventId(msg),
                 toolUseId: readToolUseId(msg),
                 toolName: String(msg.toolName ?? msg.name ?? ""),
+                title: readString(msg.title),
                 description: extractToolDescription(
                     msg.description ?? msg.arguments,
                 ),
+                arguments: readRecord(msg.arguments),
                 subagentType: msg.subagentType
                     ? String(msg.subagentType)
                     : undefined,
@@ -349,9 +354,11 @@ export const parseSingleEvent = (
                 eventId: readEventId(msg),
                 toolUseId: readToolUseId(msg),
                 toolName: readString(msg.toolName),
+                title: readString(msg.title),
                 status,
                 isPartial: readBoolean(msg.isPartial),
                 durationMs: readNumber(msg.durationMs),
+                toolParameterValues: readRecord(msg.toolParameterValues),
                 stats: stats
                     ? {
                           readCount: readNumber(stats.readCount),

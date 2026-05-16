@@ -1,6 +1,7 @@
 export type TranscriptHarness =
     | "claude_code"
-    | "github_copilot_py";
+    | "github_copilot_py"
+    | "semoss";
 
 export type TranscriptMessageType =
     | "user"
@@ -31,7 +32,9 @@ export type ToolInvocation = {
     toolUseId: string;
     eventId?: string;
     toolName: string;
+    title?: string;
     description?: string;
+    arguments?: Record<string, unknown>;
     subagentType?: string;
     timestamp: string;
     harnessType?: TranscriptHarness;
@@ -63,9 +66,11 @@ export type ToolResult = {
     toolUseId: string;
     eventId?: string;
     toolName?: string;
+    title?: string;
     status: string;
     isPartial?: boolean;
     durationMs: number;
+    toolParameterValues?: Record<string, unknown>;
     stats?: ToolStats;
     filePath?: string;
     content?: string;

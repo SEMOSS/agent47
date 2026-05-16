@@ -59,6 +59,7 @@ const LAST_ENGINE_DISPLAY_NAME_KEY = "agent47:lastEngineDisplayName";
 const VALID_HARNESS_TYPES: HarnessType[] = [
   "claude_code",
   "github_copilot_py",
+  "semoss",
 ];
 
 const readLocalStorage = (key: string): string | null => {
@@ -149,7 +150,9 @@ const getAuthorLabel = (
 ) => {
   switch (role) {
     case "assistant":
-      return harnessType === "github_copilot_py" ? "GitHub Copilot" : "Agent";
+      if (harnessType === "github_copilot_py") return "GitHub Copilot";
+      if (harnessType === "semoss") return "SEMOSS";
+      return "Agent";
     case "system":
       return "System";
     default:

@@ -120,6 +120,7 @@ const HARNESS_TYPE_OPTIONS: Array<{
 }> = [
   { value: "claude_code", label: "Claude Code" },
   { value: "github_copilot_py", label: "GitHub Copilot" },
+  { value: "semoss", label: "SEMOSS" },
 ];
 
 const getHarnessLabel = (harnessType: HarnessType) =>
