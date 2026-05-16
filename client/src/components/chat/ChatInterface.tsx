@@ -28,6 +28,8 @@ import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
 import { IssuesPanel } from "@/components/chat/IssuesPanel";
 import { EnginesPanel } from "@/components/chat/EnginesPanel";
+import { HistoryPanel } from "@/components/chat/HistoryPanel";
+import { LatestCommitChip } from "@/components/chat/LatestCommitChip";
 import { ConfirmationDialog } from "@/library/ConfirmationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -94,6 +96,10 @@ import {
   updateSkill,
 } from "@/store/slices/skillsSlice";
 import { loadSelectedModelEngines } from "@/store/slices/enginesSlice";
+import {
+  clearGitState,
+  fetchCommitHistory,
+} from "@/store/slices/gitSlice";
 import { submitAgentMessage } from "@/store/thunks/submitAgentMessage";
 import { getTranscriptEventStableKey } from "@/types/transcript";
 
@@ -222,7 +228,7 @@ export const ChatInterface = () => {
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isSkillsOpen, setIsSkillsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<
-    "build" | "issues" | "engines" | "settings"
+    "build" | "issues" | "engines" | "history" | "settings"
   >("build");
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isLoadingSkills, setIsLoadingSkills] = useState(false);
@@ -522,6 +528,20 @@ export const ChatInterface = () => {
         console.error("Failed to load selected model engines:", error);
         loadedSelectedEnginesProjectIdRef.current = null;
       });
+  }, [dispatch, projectId, runPixel]);
+
+  // Reset and refetch git history whenever the active project changes.
+  useEffect(() => {
+    dispatch(clearGitState());
+    if (!projectId) return;
+    dispatch(
+      fetchCommitHistory({
+        projectId,
+        runPixel,
+        offset: 0,
+        append: false,
+      }),
+    );
   }, [dispatch, projectId, runPixel]);
 
   const fetchEngines = useCallback(
@@ -970,21 +990,36 @@ export const ChatInterface = () => {
           value={activeTab}
           onValueChange={(value) =>
             setActiveTab(
-              value as "build" | "issues" | "engines" | "settings",
+              value as
+                | "build"
+                | "issues"
+                | "engines"
+                | "history"
+                | "settings",
             )
           }
           className="relative flex h-full flex-col"
         >
           <header className="flex flex-col gap-2 rounded-t-xl border border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-slate-50/60 via-white/40 to-sky-50/30 px-4 py-3">
-            <div className="flex flex-col items-center text-center">
-              <p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
-                Build Your App
-              </p>
-            </div>
             <div className="relative flex items-center justify-center">
               <div className="absolute left-0 top-1/2 -translate-y-1/2">
                 <ConversationHistoryPanel />
               </div>
+              <p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
+                Build Your App
+              </p>
+              <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => dispatch(startNewRoom())}
+                  title="New Chat"
+                >
+                  <SquarePen className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            <div className="flex items-center justify-center">
               <TabsList>
                 <TabsTrigger value="build">Build</TabsTrigger>
                 <TabsTrigger value="issues" className="gap-2">
@@ -999,18 +1034,9 @@ export const ChatInterface = () => {
                   ) : null}
                 </TabsTrigger>
                 <TabsTrigger value="engines">Engines</TabsTrigger>
+                <TabsTrigger value="history">History</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
               </TabsList>
-              <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => dispatch(startNewRoom())}
-                  title="New Chat"
-                >
-                  <SquarePen className="h-4 w-4" />
-                </Button>
-              </div>
             </div>
           </header>
 
@@ -1058,7 +1084,11 @@ export const ChatInterface = () => {
                       <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
                       <span>{activeHarnessLabel} is working...</span>
                     </div>
-                  ) : null}
+                  ) : (
+                    <LatestCommitChip
+                      onOpenHistory={() => setActiveTab("history")}
+                    />
+                  )}
                 </>
               )}
             </div>
@@ -1095,6 +1125,10 @@ export const ChatInterface = () => {
             className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 p-4 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
           >
             <EnginesPanel />
+          </TabsContent>
+
+          <TabsContent value="history" className="mt-0 flex flex-1 min-h-0">
+            <HistoryPanel />
           </TabsContent>
 
           <TabsContent
