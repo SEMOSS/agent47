@@ -182,9 +182,24 @@ export const runAgentHarness = createAsyncThunk<
         permissionMode: chat.permissionMode,
       };
 
+      // SEMOSS harness drives its own tool loop and benefits from an explicit
+      // maxTurns cap. CLI harnesses (claude_code, github_copilot_py) manage their
+      // own loops and ignore the cap.
       const maxTurnsPart =
         chat.harnessType === "semoss" ? ", maxTurns=30" : "";
-      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='<encode>${safeMessage}</encode>', harnessType="${chat.harnessType}"${maxTurnsPart}, paramValues=[${JSON.stringify(paramMap)}]) ;`;
+
+      // When a workspace id is configured, pass it as a named arg on RunAgent
+      // so the backend AgentRunner overlays it onto the room for the duration
+      // of this call. That binding drives the server-side per-workspace config
+      // (subdir, hooks, MCPs, system prompt) from WORKSPACE.CONFIG_JSON.
+      // Empty string = no binding; agent runs with whatever defaults the room
+      // itself carries.
+      const trimmedWorkspaceId = chat.workspaceId?.trim() ?? "";
+      const workspaceIdPart = trimmedWorkspaceId
+        ? `, workspaceId='${sanitizePixelArg(trimmedWorkspaceId)}'`
+        : "";
+
+      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='<encode>${safeMessage}</encode>', harnessType="${chat.harnessType}"${maxTurnsPart}, maxReflections=20, paramValues=[${JSON.stringify(paramMap)}]${workspaceIdPart}) ;`;
 
       const { jobId } = await runPixelAsync(pixelString);
 

@@ -37,6 +37,20 @@ export interface ChatState {
   engineDisplayName: string;
   systemPrompt: string;
   projectId: string;
+  /**
+   * Workspace ("agent identity") id this chat is bound to.
+   *
+   * <p>When set, it's passed as {@code workspaceId} on the {@code RunAgent}
+   * pixel call, which makes the backend AgentRunner overlay it onto
+   * room.options.workspace.workspace_id for that run. That binding drives the
+   * server-side per-workspace config in {@code WORKSPACE.CONFIG_JSON}: subdir
+   * (e.g. "client"), hooks (e.g. git_commit), MCP layer, system prompt
+   * fallback, etc.
+   *
+   * <p>Empty string = no workspace binding; agent runs with whatever defaults
+   * the room itself carries (legacy / pre-CONFIG_JSON behavior).
+   */
+  workspaceId: string;
   permissionMode: PermissionMode;
   harnessType: HarnessType;
   inputMessage: string;
@@ -55,6 +69,7 @@ const LAST_PROJECT_ID_KEY = "agent47:lastProjectId";
 const LAST_HARNESS_TYPE_KEY = "agent47:lastHarnessType";
 const LAST_ENGINE_ID_KEY = "agent47:lastEngineId";
 const LAST_ENGINE_DISPLAY_NAME_KEY = "agent47:lastEngineDisplayName";
+const LAST_WORKSPACE_ID_KEY = "agent47:lastWorkspaceId";
 
 const VALID_HARNESS_TYPES: HarnessType[] = [
   "claude_code",
@@ -112,6 +127,9 @@ const loadInitialEngineId = (): string =>
 const loadInitialEngineDisplayName = (): string =>
   readLocalStorage(LAST_ENGINE_DISPLAY_NAME_KEY) ?? "";
 
+const loadInitialWorkspaceId = (): string =>
+  readLocalStorage(LAST_WORKSPACE_ID_KEY) ?? "";
+
 const loadInitialRoomId = (): string => {
   const projectId = loadInitialProjectId();
   if (projectId) {
@@ -128,6 +146,7 @@ const initialState: ChatState = {
   systemPrompt:
     "You are helping a user build and modify a React application that runs on the SEMOSS platform. Work exclusively within the current working directory — do not read, write, or traverse files in parent directories. Building the app is done exclusively through the \`BuildAndPublishApp\` tool, which takes the project id: \`${projectId}\`. Node, npm, pnpm, and other JavaScript build tooling are not available via Bash. Invoke \`BuildAndPublishApp\` once at the end of any turn that modified source files — not after every individual edit. When the user's request requires platform-specific code (calling models, querying databases, working with storage or vector catalogs), consult the relevant skill before writing code. Skill descriptions cover when to use them. If an agent-memory skill is available, follow its guidance for recalling and persisting lessons.",
   projectId: loadInitialProjectId(),
+  workspaceId: loadInitialWorkspaceId(),
   permissionMode: "acceptEdits",
   harnessType: loadInitialHarnessType(),
   inputMessage: "",
@@ -194,6 +213,10 @@ const chatSlice = createSlice({
     setProjectId(state, action: PayloadAction<string>) {
       state.projectId = action.payload;
       writeLocalStorage(LAST_PROJECT_ID_KEY, action.payload);
+    },
+    setWorkspaceId(state, action: PayloadAction<string>) {
+      state.workspaceId = action.payload;
+      writeLocalStorage(LAST_WORKSPACE_ID_KEY, action.payload);
     },
     setPermissionMode(state, action: PayloadAction<PermissionMode>) {
       state.permissionMode = action.payload;
@@ -343,6 +366,7 @@ export const {
   setEngineDisplayName,
   setSystemPrompt,
   setProjectId,
+  setWorkspaceId,
   setPermissionMode,
   setHarnessType,
   setActiveProject,
