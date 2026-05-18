@@ -73,6 +73,7 @@ import {
   setInputMessage,
   setPermissionMode,
   setSystemPrompt,
+  setWorkspaceId,
   startNewRoom,
 } from "@/store/slices/chatSlice";
 import {
@@ -202,6 +203,7 @@ export const ChatInterface = () => {
     engineId,
     engineDisplayName,
     projectId,
+    workspaceId,
     systemPrompt,
     permissionMode,
     harnessType,
@@ -1299,7 +1301,8 @@ export const ChatInterface = () => {
                     <DialogHeader>
                       <DialogTitle>Configuration</DialogTitle>
                       <DialogDescription>
-                        Configure permission mode for this workspace.
+                        Configure permission mode and workspace binding for this
+                        chat.
                       </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4">
@@ -1327,6 +1330,23 @@ export const ChatInterface = () => {
                             ))}
                           </SelectContent>
                         </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="workspace-id">Workspace ID</Label>
+                        <Input
+                          id="workspace-id"
+                          value={workspaceId}
+                          placeholder="e.g. 228b439d-3d68-4d22-aaa0-10252c39045d"
+                          onChange={(event) =>
+                            dispatch(setWorkspaceId(event.target.value.trim()))
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Optional. When set, drives the agent's server-side
+                          config (subdir, hooks, MCPs, system prompt) from
+                          WORKSPACE.CONFIG_JSON. Leave blank for legacy
+                          behavior.
+                        </p>
                       </div>
                     </div>
                     <DialogFooter>
