@@ -29,14 +29,19 @@ import {
 import { useState } from "react";
 
 const formatTimestamp = (timestamp: string) => {
-    try {
-        return new Date(timestamp).toLocaleTimeString([], {
-            hour: "numeric",
-            minute: "2-digit",
-        });
-    } catch {
+    if (!timestamp) {
         return timestamp;
     }
+
+    const parsed = new Date(timestamp);
+    if (Number.isNaN(parsed.getTime())) {
+        return timestamp;
+    }
+
+    return parsed.toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit",
+    });
 };
 
 const shortenPath = (filePath: string, maxParts = 3): string => {
@@ -82,6 +87,7 @@ const TOOL_LABELS: Record<string, string> = {
 
 const toTitleCase = (value: string) =>
     value
+        .replace(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}_/i, "")
         .replace(/[_-]+/g, " ")
         .replace(/\b\w/g, (char) => char.toUpperCase());
 
@@ -94,8 +100,106 @@ const getToolDisplayName = (toolName: string) => {
     return TOOL_LABELS[normalized.toLowerCase()] ?? toTitleCase(normalized);
 };
 
-const getToolIcon = (toolName: string) =>
-    TOOL_ICONS[toolName.trim().toLowerCase()] ?? Wrench;
+const stripToolEnginePrefix = (toolName: string) =>
+    toolName.trim().replace(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}_/i, "");
+
+const getToolLookupKey = (toolName: string) =>
+    stripToolEnginePrefix(toolName).replace(/[\s_-]+/g, "").toLowerCase();
+
+const getToolIcon = (toolName: string) => {
+    const rawKey = toolName.trim().toLowerCase();
+    const lookupKey = getToolLookupKey(toolName);
+    return TOOL_ICONS[rawKey] ?? TOOL_ICONS[lookupKey] ?? Wrench;
+};
+
+const isReportToUserTool = (toolName?: string, title?: string) => {
+    const key = getToolLookupKey(toolName ?? title ?? "");
+    return key === "reporttouser" || key === "reportprogress";
+};
+
+const getToolArgumentString = (
+    args: Record<string, unknown> | undefined,
+    key: string,
+) => {
+    const value = args?.[key];
+    return typeof value === "string" ? value.trim() : "";
+};
+
+const LARGE_TEXT_ARG_KEYS = new Set([
+    "content",
+    "new_string",
+    "old_string",
+    "script",
+    "text",
+]);
+
+const IMPORTANT_ARG_KEYS = [
+    "file_path",
+    "filePath",
+    "path",
+    "command",
+    "query",
+    "pattern",
+    "glob",
+    "offset",
+    "limit",
+    "content",
+    "old_string",
+    "new_string",
+    "script",
+];
+
+const truncateMiddle = (value: string, maxLength: number) => {
+    if (value.length <= maxLength) return value;
+    const headLength = Math.ceil((maxLength - 1) * 0.62);
+    const tailLength = Math.floor((maxLength - 1) * 0.38);
+    return `${value.slice(0, headLength)}…${value.slice(-tailLength)}`;
+};
+
+const formatLargeTextSummary = (value: string) => {
+    const lineCount = value.split(/\r\n|\r|\n/).length;
+    const bytes = new Blob([value]).size;
+    const size =
+        bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
+    return `<${size}${lineCount > 1 ? `, ${lineCount} lines` : ""}>`;
+};
+
+const formatToolArgValue = (key: string, value: unknown) => {
+    if (typeof value === "string") {
+        if (LARGE_TEXT_ARG_KEYS.has(key) && value.length > 80) {
+            return formatLargeTextSummary(value);
+        }
+        return truncateMiddle(value.replace(/\s+/g, " "), 90);
+    }
+
+    const rendered = JSON.stringify(value);
+    return rendered ? truncateMiddle(rendered, 90) : String(value);
+};
+
+const formatToolArgs = (args?: Record<string, unknown>) => {
+    if (!args) return "";
+
+    const presentEntries = Object.entries(args).filter(
+        ([, value]) => value !== undefined && value !== null && value !== "",
+    );
+    const orderedEntries = [
+        ...IMPORTANT_ARG_KEYS.flatMap((key) =>
+            presentEntries.filter(([entryKey]) => entryKey === key),
+        ),
+        ...presentEntries.filter(
+            ([key]) => !IMPORTANT_ARG_KEYS.includes(key),
+        ),
+    ];
+    const entries = orderedEntries.slice(0, 4);
+    if (entries.length === 0) return "";
+
+    const extraCount = orderedEntries.length - entries.length;
+    const summary = entries
+        .map(([key, value]) => `${key}=${formatToolArgValue(key, value)}`)
+        .join(", ");
+
+    return `${summary}${extraCount > 0 ? `, +${extraCount} more` : ""}`;
+};
 
 const buildStatsSummary = (stats: ToolStats): string => {
     const parts: string[] = [];
@@ -113,6 +217,8 @@ const getHarnessLabel = (harnessType?: TranscriptHarness) => {
     switch (harnessType) {
         case "github_copilot_py":
             return "GitHub Copilot";
+        case "semoss":
+            return "SEMOSS";
         case "claude_code":
             return "Claude Code";
         default:
@@ -121,23 +227,48 @@ const getHarnessLabel = (harnessType?: TranscriptHarness) => {
 };
 
 const ToolInvocationBubble = ({ event }: { event: ToolInvocation }) => {
+    if (isReportToUserTool(event.toolName, event.title)) {
+        const message =
+            getToolArgumentString(event.arguments, "message") ||
+            formatToolArgs(event.arguments) ||
+            "Working on the next step.";
+
+        return (
+            <div className="flex flex-col gap-1 items-start">
+                <div className="flex items-start gap-2 max-w-[75%] rounded-xl border border-blue-200/80 dark:border-blue-400/20 bg-blue-50/80 dark:bg-blue-950/25 px-3 py-2 text-xs text-blue-900/80 dark:text-blue-100/80">
+                    <Sparkles className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-500 dark:text-blue-300" />
+                    <div className="min-w-0 flex-1">
+                        <span className="font-medium break-words">
+                            {message}
+                        </span>
+                    </div>
+                    <span className="shrink-0 text-[10px] text-blue-700/50 dark:text-blue-200/45">
+                        {formatTimestamp(event.timestamp)}
+                    </span>
+                </div>
+            </div>
+        );
+    }
+
     const Icon = getToolIcon(event.toolName);
+    const displayName = event.title ?? getToolDisplayName(event.toolName);
     const label = event.subagentType
-        ? `${getToolDisplayName(event.toolName)} (${event.subagentType})`
-        : getToolDisplayName(event.toolName);
+        ? `${displayName} (${event.subagentType})`
+        : displayName;
+    const argsSummary = formatToolArgs(event.arguments);
 
     return (
         <div className="flex flex-col gap-1 items-start">
             <div className="flex items-start gap-2 max-w-[75%] rounded-xl border border-dashed border-slate-300 dark:border-white/15 bg-slate-50/80 dark:bg-zinc-800/40 px-3 py-2 text-xs text-muted-foreground">
                 <Icon className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-500 dark:text-blue-400" />
                 <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-0.5">
+                    <div className="flex min-w-0 flex-col gap-0.5">
                         <span className="shrink-0 whitespace-nowrap font-medium text-foreground/80">
                             {label}
                         </span>
-                        {event.description && (
-                            <span className="min-w-0 break-all text-muted-foreground">
-                                {event.description}
+                        {argsSummary && (
+                            <span className="min-w-0 break-words text-muted-foreground">
+                                {argsSummary}
                             </span>
                         )}
                     </div>
@@ -152,6 +283,11 @@ const ToolInvocationBubble = ({ event }: { event: ToolInvocation }) => {
 
 const ToolResultBubble = ({ event }: { event: ToolResult }) => {
     const [expanded, setExpanded] = useState(false);
+
+    if (isReportToUserTool(event.toolName, event.title)) {
+        return null;
+    }
+
     const isSuccess =
         event.status === "completed" || event.status === "success";
     const isError = event.status === "error" || event.status === "failed";
@@ -181,7 +317,7 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
     const hasContent = !!previewContent;
     const ExpandIcon = expanded ? ChevronDown : ChevronRight;
     const toolLabel = event.toolName
-        ? `${getToolDisplayName(event.toolName)} Result`
+        ? `${event.title ?? getToolDisplayName(event.toolName)} Result`
         : "Tool Result";
 
     return (

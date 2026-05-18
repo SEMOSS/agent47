@@ -36,6 +36,9 @@ const readHarnessType = (
   if (value === "github_copilot" || value === "github_copilot_py") {
     return "github_copilot_py";
   }
+  if (value === "semoss") {
+    return "semoss";
+  }
   if (value === "claude_code") {
     return "claude_code";
   }
@@ -104,6 +107,59 @@ const loadGitHubCopilotHistory = async (
   );
 };
 
+const parseSemossHistoryText = (history: string): TranscriptEvent[] => {
+  if (!history.trim()) {
+    return [];
+  }
+
+  return history.split(/\n---\n/g).flatMap((pair, index) => {
+    const assistantMarker = "\nAssistant: ";
+    const body = pair.startsWith("User: ") ? pair.slice("User: ".length) : pair;
+    const assistantIndex = body.indexOf(assistantMarker);
+    const userText =
+      assistantIndex >= 0 ? body.slice(0, assistantIndex) : body;
+    const assistantText =
+      assistantIndex >= 0
+        ? body.slice(assistantIndex + assistantMarker.length)
+        : "";
+    const timestamp = "";
+    const events: TranscriptEvent[] = [];
+
+    if (userText.trim()) {
+      events.push({
+        kind: "user-prompt",
+        promptId: `semoss-history-user-${index}`,
+        text: userText,
+        timestamp,
+        harnessType: "semoss",
+      });
+    }
+
+    if (assistantText.trim()) {
+      events.push({
+        kind: "assistant-text",
+        eventId: `semoss-history-assistant-${index}`,
+        text: assistantText,
+        timestamp,
+        harnessType: "semoss",
+      });
+    }
+
+    return events;
+  });
+};
+
+const loadSemossHistory = async (
+  roomId: string,
+  runPixel: RunPixelFn,
+): Promise<TranscriptEvent[]> => {
+  const history = await runPixel<unknown>(
+    `GetRoomConversationHistory(roomId='${roomId}', sort='ASC');`,
+  );
+
+  return typeof history === "string" ? parseSemossHistoryText(history) : [];
+};
+
 const loadHistoryForHarness = async (
   roomId: string,
   harnessType: ChatState["harnessType"],
@@ -112,8 +168,26 @@ const loadHistoryForHarness = async (
   if (harnessType === "claude_code") {
     return loadClaudeCodeHistory(roomId, runPixel);
   }
+  if (harnessType === "semoss") {
+    return loadSemossHistory(roomId, runPixel);
+  }
 
   return loadGitHubCopilotHistory(roomId, runPixel);
+};
+
+const uniqueHarnessOrder = (
+  preferredHarnessType: ChatState["harnessType"],
+): ChatState["harnessType"][] => {
+  const order: ChatState["harnessType"][] = [
+    preferredHarnessType,
+    "semoss",
+    "github_copilot_py",
+    "claude_code",
+  ];
+
+  return order.filter(
+    (harnessType, index) => order.indexOf(harnessType) === index,
+  );
 };
 
 const inferHistoryFromRoom = async (
@@ -124,41 +198,18 @@ const inferHistoryFromRoom = async (
   harnessType: ChatState["harnessType"];
   events: TranscriptEvent[];
 }> => {
-  const [copilotResult, claudeResult] = await Promise.allSettled([
-    loadGitHubCopilotHistory(roomId, runPixel),
-    loadClaudeCodeHistory(roomId, runPixel),
-  ]);
-
-  const copilotEvents =
-    copilotResult.status === "fulfilled" ? copilotResult.value : [];
-  const claudeEvents =
-    claudeResult.status === "fulfilled" ? claudeResult.value : [];
-
-  if (copilotEvents.length > 0 && claudeEvents.length === 0) {
-    return {
-      harnessType: "github_copilot_py",
-      events: copilotEvents,
-    };
+  for (const harnessType of uniqueHarnessOrder(fallbackHarnessType)) {
+    try {
+      const events = await loadHistoryForHarness(roomId, harnessType, runPixel);
+      if (events.length > 0) {
+        return { harnessType, events };
+      }
+    } catch (error) {
+      console.warn(`Failed to load ${harnessType} transcript history:`, error);
+    }
   }
 
-  if (claudeEvents.length > 0 && copilotEvents.length === 0) {
-    return {
-      harnessType: "claude_code",
-      events: claudeEvents,
-    };
-  }
-
-  if (fallbackHarnessType === "github_copilot_py") {
-    return {
-      harnessType: "github_copilot_py",
-      events: copilotEvents,
-    };
-  }
-
-  return {
-    harnessType: "claude_code",
-    events: claudeEvents,
-  };
+  return { harnessType: fallbackHarnessType, events: [] };
 };
 
 export const loadConversationHistory = createAsyncThunk<

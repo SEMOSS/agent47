@@ -114,6 +114,7 @@ export const WebSocketTestPanel = ({ onClose }: { onClose: () => void }) => {
           >
             <option value="claude_code">Claude Code</option>
             <option value="github_copilot_py">GitHub Copilot</option>
+            <option value="semoss">SEMOSS</option>
           </select>
           <input
             type="text"

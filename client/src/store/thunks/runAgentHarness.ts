@@ -8,7 +8,10 @@ import {
 } from "../slices/chatSlice";
 import type { MCPState } from "../slices/mcpSlice";
 import type { EnginesState } from "../slices/enginesSlice";
-import { addTranscriptEvent } from "../slices/transcriptSlice";
+import {
+  addTranscriptEvent,
+  type TranscriptState,
+} from "../slices/transcriptSlice";
 import { fetchCommitHistory } from "../slices/gitSlice";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
@@ -98,6 +101,32 @@ export const updateRoomOptions = createAsyncThunk<
 const TERMINAL_STATUSES = new Set(["ProgressComplete", "Complete", "Error"]);
 const POLLING_INTERVAL_MS = 300;
 
+const createSemossFallbackTranscriptEvents = (
+  roomId: string,
+  message: string,
+  response: string,
+) => {
+  const timestamp = new Date().toISOString();
+  const idBase = `semoss-${roomId}-${Date.now()}`;
+
+  return [
+    {
+      kind: "user-prompt" as const,
+      promptId: `${idBase}-user`,
+      text: message,
+      timestamp,
+      harnessType: "semoss" as const,
+    },
+    {
+      kind: "assistant-text" as const,
+      eventId: `${idBase}-assistant`,
+      text: response,
+      timestamp,
+      harnessType: "semoss" as const,
+    },
+  ];
+};
+
 export const runAgentHarness = createAsyncThunk<
   { response: string },
   {
@@ -110,7 +139,7 @@ export const runAgentHarness = createAsyncThunk<
     projectId?: string;
     engineId?: string;
   },
-  { rejectValue: string; state: { chat: ChatState; mcp: MCPState; engines: EnginesState } }
+  { rejectValue: string; state: { chat: ChatState; mcp: MCPState; engines: EnginesState; transcript: TranscriptState } }
 >(
   "chat/runAgentHarness",
   async (
@@ -128,6 +157,7 @@ export const runAgentHarness = createAsyncThunk<
     try {
       const { chat, mcp, engines } = getState();
       const targetProjectId = projectId ?? chat.projectId;
+      const initialTranscriptEventCount = getState().transcript.events.length;
 
       const selectedMcps: MCPDetails[] = mcp.selectedMcps.map((x) => ({
         id: x.id,
@@ -152,7 +182,24 @@ export const runAgentHarness = createAsyncThunk<
         permissionMode: chat.permissionMode,
       };
 
-      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='<encode>${safeMessage}</encode>', harnessType="${chat.harnessType}", maxReflections=20, paramValues=[${JSON.stringify(paramMap)}]) ;`;
+      // SEMOSS harness drives its own tool loop and benefits from an explicit
+      // maxTurns cap. CLI harnesses (claude_code, github_copilot_py) manage their
+      // own loops and ignore the cap.
+      const maxTurnsPart =
+        chat.harnessType === "semoss" ? ", maxTurns=30" : "";
+
+      // When a workspace id is configured, pass it as a named arg on RunAgent
+      // so the backend AgentRunner overlays it onto the room for the duration
+      // of this call. That binding drives the server-side per-workspace config
+      // (subdir, hooks, MCPs, system prompt) from WORKSPACE.CONFIG_JSON.
+      // Empty string = no binding; agent runs with whatever defaults the room
+      // itself carries.
+      const trimmedWorkspaceId = chat.workspaceId?.trim() ?? "";
+      const workspaceIdPart = trimmedWorkspaceId
+        ? `, workspaceId='${sanitizePixelArg(trimmedWorkspaceId)}'`
+        : "";
+
+      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='<encode>${safeMessage}</encode>', harnessType="${chat.harnessType}"${maxTurnsPart}, maxReflections=20, paramValues=[${JSON.stringify(paramMap)}]${workspaceIdPart}) ;`;
 
       const { jobId } = await runPixelAsync(pixelString);
 
@@ -207,6 +254,19 @@ export const runAgentHarness = createAsyncThunk<
         result.results.length > 1
           ? (result.results[1].output as string)
           : (result.results[0].output as string);
+
+      if (
+        chat.harnessType === "semoss" &&
+        getState().transcript.events.length === initialTranscriptEventCount
+      ) {
+        for (const event of createSemossFallbackTranscriptEvents(
+          chat.roomId,
+          message,
+          String(finalResponse ?? ""),
+        )) {
+          dispatch(addTranscriptEvent(event));
+        }
+      }
 
       if (shouldGenerateRoomName) {
         try {
