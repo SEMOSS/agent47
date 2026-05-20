@@ -199,7 +199,7 @@ export const runAgentHarness = createAsyncThunk<
         ? `, workspaceId='${sanitizePixelArg(trimmedWorkspaceId)}'`
         : "";
 
-      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='<encode>${safeMessage}</encode>', harnessType="${chat.harnessType}"${maxTurnsPart}, maxReflections=20, paramValues=[${JSON.stringify(paramMap)}]${workspaceIdPart}) ;`;
+      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='<encode>${safeMessage}</encode>', harnessType="${chat.harnessType}"${maxTurnsPart}, maxReflections=0, paramValues=[${JSON.stringify(paramMap)}]${workspaceIdPart}) ;`;
 
       const { jobId } = await runPixelAsync(pixelString);
 
