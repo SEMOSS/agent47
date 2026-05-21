@@ -107,57 +107,171 @@ const loadGitHubCopilotHistory = async (
   );
 };
 
-const parseSemossHistoryText = (history: string): TranscriptEvent[] => {
-  if (!history.trim()) {
-    return [];
+export type PlaygroundMessage = {
+  type?: string;
+  io?: string;
+  messageId?: string;
+  transactionId?: string;
+  parentMessageId?: string;
+  visible?: boolean;
+  dateCreated?: string;
+  ornaments?: {
+    modelName?: string;
+  };
+  parts?: PlaygroundMessagePart[];
+};
+
+export type PlaygroundMessagePart = {
+  type?: string;
+  text?: string;
+  uiText?: string;
+  toolCall?: {
+    id?: string;
+    name?: string;
+    original_name?: string;
+    title?: string;
+    description?: string;
+    arguments?: Record<string, unknown>;
+  };
+  toolResult?: {
+    toolCallId?: string;
+    toolName?: string;
+    output?: unknown;
+    toolParameterValues?: Record<string, unknown>;
+    toolStatus?: string;
+  };
+};
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+};
+
+const stringifyToolOutput = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return undefined;
   }
 
-  return history.split(/\n---\n/g).flatMap((pair, index) => {
-    const assistantMarker = "\nAssistant: ";
-    const body = pair.startsWith("User: ") ? pair.slice("User: ".length) : pair;
-    const assistantIndex = body.indexOf(assistantMarker);
-    const userText =
-      assistantIndex >= 0 ? body.slice(0, assistantIndex) : body;
-    const assistantText =
-      assistantIndex >= 0
-        ? body.slice(assistantIndex + assistantMarker.length)
-        : "";
-    const timestamp = "";
-    const events: TranscriptEvent[] = [];
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
 
-    if (userText.trim()) {
-      events.push({
-        kind: "user-prompt",
-        promptId: `semoss-history-user-${index}`,
-        text: userText,
-        timestamp,
-        harnessType: "semoss",
-      });
+export const parsePlaygroundMessages = (
+  messages: PlaygroundMessage[],
+): TranscriptEvent[] => {
+  const events: TranscriptEvent[] = [];
+  for (const [messageIndex, msg] of messages.entries()) {
+    const parts = msg.parts ?? [];
+    const hasToolResult = parts.some((part) => part.type === "TOOL_RESULT");
+    const hasToolCall = parts.some((part) => part.type === "TOOL_CALL");
+
+    if (msg.visible === false && !hasToolResult && !hasToolCall) {
+      continue;
     }
 
-    if (assistantText.trim()) {
-      events.push({
-        kind: "assistant-text",
-        eventId: `semoss-history-assistant-${index}`,
-        text: assistantText,
-        timestamp,
-        harnessType: "semoss",
-      });
-    }
+    const timestamp = msg.dateCreated ?? "";
+    const modelName = msg.ornaments?.modelName;
 
-    return events;
-  });
+    for (const [partIndex, part] of parts.entries()) {
+      if (part.type === "TEXT") {
+        if (msg.visible === false) {
+          continue;
+        }
+
+        const text =
+          msg.io === "INPUT"
+            ? (part.uiText ?? part.text ?? "")
+            : (part.text ?? "");
+        if (!text.trim()) {
+          continue;
+        }
+
+        if (msg.io === "INPUT") {
+          events.push({
+            kind: "user-prompt",
+            promptId:
+              msg.messageId ??
+              `${msg.transactionId ?? "semoss-history-user"}:${partIndex}:${messageIndex}`,
+            text,
+            timestamp,
+            harnessType: "semoss",
+          });
+        } else if (msg.io === "OUTPUT") {
+          events.push({
+            kind: "assistant-text",
+            eventId:
+              msg.messageId ??
+              `${msg.transactionId ?? "semoss-history-assistant"}:${partIndex}:${messageIndex}`,
+            text,
+            timestamp,
+            model: modelName,
+            harnessType: "semoss",
+          });
+        }
+
+        continue;
+      }
+
+      if (part.type === "TOOL_CALL" && part.toolCall) {
+        const toolUseId =
+          part.toolCall.id ??
+          `${msg.messageId ?? msg.transactionId ?? "semoss-tool-call"}:${partIndex}`;
+
+        events.push({
+          kind: "tool-invocation",
+          eventId: `${toolUseId}:invocation`,
+          toolUseId,
+          toolName:
+            part.toolCall.original_name ?? part.toolCall.name ?? "Tool",
+          title: part.toolCall.title,
+          description: part.toolCall.description,
+          arguments: asRecord(part.toolCall.arguments),
+          timestamp,
+          harnessType: "semoss",
+        });
+        continue;
+      }
+
+      if (part.type === "TOOL_RESULT" && part.toolResult) {
+        const toolUseId =
+          part.toolResult.toolCallId ??
+          `${msg.parentMessageId ?? msg.messageId ?? msg.transactionId ?? "semoss-tool-result"}:${partIndex}`;
+
+        events.push({
+          kind: "tool-result",
+          eventId: `${toolUseId}:result`,
+          toolUseId,
+          toolName: part.toolResult.toolName,
+          status: part.toolResult.toolStatus ?? "completed",
+          durationMs: 0,
+          toolParameterValues: asRecord(part.toolResult.toolParameterValues),
+          content: stringifyToolOutput(part.toolResult.output),
+          timestamp,
+          harnessType: "semoss",
+        });
+      }
+    }
+  }
+  return events;
 };
 
 const loadSemossHistory = async (
   roomId: string,
   runPixel: RunPixelFn,
 ): Promise<TranscriptEvent[]> => {
-  const history = await runPixel<unknown>(
-    `GetRoomConversationHistory(roomId='${roomId}', sort='ASC');`,
+  const messages = await runPixel<PlaygroundMessage[]>(
+    `GetPlaygroundMessages(roomId='${roomId}', sort='ASC');`,
   );
 
-  return typeof history === "string" ? parseSemossHistoryText(history) : [];
+  return Array.isArray(messages) ? parsePlaygroundMessages(messages) : [];
 };
 
 const loadHistoryForHarness = async (

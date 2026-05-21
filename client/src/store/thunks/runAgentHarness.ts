@@ -10,9 +10,15 @@ import type { MCPState } from "../slices/mcpSlice";
 import type { EnginesState } from "../slices/enginesSlice";
 import {
   addTranscriptEvent,
+  setTranscriptEvents,
   type TranscriptState,
 } from "../slices/transcriptSlice";
 import { fetchCommitHistory } from "../slices/gitSlice";
+import type { AssistantText } from "@/types/transcript";
+import {
+  parsePlaygroundMessages,
+  type PlaygroundMessage,
+} from "./conversationHistory";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
 type RunPixelAsyncFn = (pixelString: string) => Promise<{ jobId: string }>;
@@ -32,6 +38,8 @@ type GetPixelAsyncResultFn = <O extends unknown[] | []>(
   }[];
 }>;
 type GetPixelJobStreamingFn = (jobId: string) => Promise<StreamingResponse>;
+
+type StreamMessage = StreamingResponse["message"][number];
 
 const sanitizePixelArg = (value: string) => value.replace(/'/g, '"');
 
@@ -127,6 +135,124 @@ const createSemossFallbackTranscriptEvents = (
   ];
 };
 
+const normalizeTranscriptText = (value: string) =>
+  value.replace(/\r\n/g, "\n").trim();
+
+const findLastSemossAssistantText = (
+  events: TranscriptState["events"],
+  startIndex: number,
+): AssistantText | undefined => {
+  for (let index = events.length - 1; index >= startIndex; index -= 1) {
+    const event = events[index];
+    if (event?.kind === "assistant-text" && event.harnessType === "semoss") {
+      return event;
+    }
+  }
+  return undefined;
+};
+
+const ensureSemossFinalAssistantText = ({
+  jobId,
+  response,
+  transcriptEvents,
+  transcriptStartIndex,
+}: {
+  jobId: string;
+  response: string;
+  transcriptEvents: TranscriptState["events"];
+  transcriptStartIndex: number;
+}): AssistantText | null => {
+  const normalizedResponse = normalizeTranscriptText(response);
+  if (!normalizedResponse) {
+    return null;
+  }
+
+  const lastAssistantEvent = findLastSemossAssistantText(
+    transcriptEvents,
+    transcriptStartIndex,
+  );
+
+  if (
+    lastAssistantEvent &&
+    normalizeTranscriptText(lastAssistantEvent.text) === normalizedResponse &&
+    lastAssistantEvent.isPartial === false
+  ) {
+    return null;
+  }
+
+  if (
+    lastAssistantEvent &&
+    normalizeTranscriptText(lastAssistantEvent.text) === normalizedResponse
+  ) {
+    return {
+      ...lastAssistantEvent,
+      text: response,
+      isPartial: false,
+      timestamp: lastAssistantEvent.timestamp || new Date().toISOString(),
+    };
+  }
+
+  if (
+    lastAssistantEvent &&
+    normalizedResponse.startsWith(normalizeTranscriptText(lastAssistantEvent.text))
+  ) {
+    return {
+      ...lastAssistantEvent,
+      text: response,
+      isPartial: false,
+      timestamp: lastAssistantEvent.timestamp || new Date().toISOString(),
+    };
+  }
+
+  return {
+    kind: "assistant-text",
+    eventId: `semoss-final-${jobId}`,
+    text: response,
+    isPartial: false,
+    timestamp: new Date().toISOString(),
+    harnessType: "semoss",
+    model: lastAssistantEvent?.model,
+  };
+};
+
+const stampSemossStreamMessage = (
+  streamMessage: StreamMessage,
+  jobId: string,
+): StreamMessage => {
+  if (streamMessage.stream_type !== "content" && streamMessage.stream_type !== "thinking") {
+    return streamMessage;
+  }
+
+  const data = streamMessage.data ?? {};
+  const kind =
+    typeof data.kind === "string" ? data.kind : undefined;
+  const hasTextPayload =
+    typeof data.text === "string" ||
+    typeof data.content === "string" ||
+    typeof data.thinking === "string";
+
+  if (!kind && !hasTextPayload) {
+    return streamMessage;
+  }
+
+  if (kind === "user-prompt" || kind === "agent-result") {
+    return streamMessage;
+  }
+
+  const stampedData = {
+    ...data,
+    eventId:
+      streamMessage.stream_type === "thinking"
+        ? `semoss-thinking-${jobId}`
+        : `semoss-assistant-${jobId}`,
+  };
+
+  return {
+    ...streamMessage,
+    data: stampedData,
+  };
+};
+
 export const runAgentHarness = createAsyncThunk<
   { response: string },
   {
@@ -215,8 +341,12 @@ export const runAgentHarness = createAsyncThunk<
 
           if (response && response.message.length > 0) {
             for (const streamMsg of response.message) {
+              const normalizedStreamMsg =
+                chat.harnessType === "semoss"
+                  ? stampSemossStreamMessage(streamMsg, jobId)
+                  : streamMsg;
               const events = parseTranscriptMessage(
-                streamMsg,
+                normalizedStreamMsg,
                 chat.harnessType,
               );
               for (const event of events) {
@@ -265,6 +395,29 @@ export const runAgentHarness = createAsyncThunk<
           String(finalResponse ?? ""),
         )) {
           dispatch(addTranscriptEvent(event));
+        }
+      } else if (chat.harnessType === "semoss") {
+        const finalAssistantEvent = ensureSemossFinalAssistantText({
+          jobId,
+          response: String(finalResponse ?? ""),
+          transcriptEvents: getState().transcript.events,
+          transcriptStartIndex: initialTranscriptEventCount,
+        });
+
+        if (finalAssistantEvent) {
+          dispatch(addTranscriptEvent(finalAssistantEvent));
+        }
+
+        try {
+          const persistedMessages = await runPixel<PlaygroundMessage[]>(
+            `GetPlaygroundMessages(roomId='${chat.roomId}', sort='ASC');`,
+          );
+
+          if (Array.isArray(persistedMessages)) {
+            dispatch(setTranscriptEvents(parsePlaygroundMessages(persistedMessages)));
+          }
+        } catch (error) {
+          console.warn("Failed to refresh SEMOSS transcript from playground history:", error);
         }
       }
 
