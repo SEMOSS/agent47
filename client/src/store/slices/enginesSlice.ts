@@ -3,6 +3,7 @@ import {
   createSlice,
   type PayloadAction,
 } from "@reduxjs/toolkit";
+import type { RootState } from "../store";
 
 type RunPixelFn = <T = unknown>(pixelString: string) => Promise<T>;
 
@@ -122,13 +123,6 @@ export const fetchEnginesByType = createAsyncThunk<
   return { type, items, filterWord: search };
 });
 
-const PIXEL_CATEGORY_KEY: Record<EngineCategory, string> = {
-  MODEL: "model_engines",
-  DATABASE: "database_engines",
-  STORAGE: "storage_engines",
-  VECTOR: "vector_engines",
-};
-
 export const loadSelectedModelEngines = createAsyncThunk<
   EngineItem[],
   { projectId: string; runPixel: RunPixelFn }
@@ -148,22 +142,82 @@ export const loadSelectedModelEngines = createAsyncThunk<
     .filter((e): e is EngineItem => e !== null);
 });
 
+// Re-hydrates all four engine categories from the SEMOSS project's native
+// dependency graph (GetProjectDependencies). This is the source of truth
+// for engine connections across refreshes — saveSelectedEngines mirrors
+// every selection change into the dep graph via SetProjectDependencies.
+export const loadProjectEngineDependencies = createAsyncThunk<
+  Record<EngineCategory, EngineItem[]>,
+  { projectId: string; runPixel: RunPixelFn }
+>(
+  "engines/loadProjectEngineDependencies",
+  async ({ projectId, runPixel }) => {
+    const pixel = `GetProjectDependencies(project=['${projectId}']);`;
+    const response = await runPixel<unknown>(pixel);
+
+    const buckets: Record<EngineCategory, EngineItem[]> = {
+      MODEL: [],
+      DATABASE: [],
+      STORAGE: [],
+      VECTOR: [],
+    };
+
+    const engines =
+      response &&
+      typeof response === "object" &&
+      Array.isArray((response as { engines?: unknown[] }).engines)
+        ? ((response as { engines: unknown[] }).engines)
+        : [];
+
+    for (const raw of engines) {
+      if (!raw || typeof raw !== "object") continue;
+      const item = normalizeEngine(
+        raw as Record<string, any>,
+        "MODEL", // fallback only — GetProjectDependencies rows always carry engine_type
+      );
+      if (!item) continue;
+      if (item.type in buckets) {
+        buckets[item.type].push(item);
+      }
+    }
+
+    for (const cat of ENGINE_CATEGORIES) {
+      buckets[cat] = dedupeById(buckets[cat]);
+    }
+
+    return buckets;
+  },
+);
+
 export const saveSelectedEngines = createAsyncThunk<
   void,
   {
     projectId: string;
-    category: EngineCategory;
-    engines: EngineItem[];
     runPixel: RunPixelFn;
-  }
+  },
+  { state: RootState }
 >(
   "engines/saveSelectedEngines",
-  async ({ projectId, category, engines, runPixel }) => {
-    const list = engines.map((e) => ({ name: e.name, id: e.id }));
-    const enginesJson = JSON.stringify(list);
-    const key = PIXEL_CATEGORY_KEY[category];
-    const pixel = `UpdateAppBuilderConfig(project='${projectId}', ${key}=[${enginesJson}]);`;
-    await runPixel(pixel);
+  async ({ projectId, runPixel }, { getState }) => {
+    // SEMOSS's native project-dependency graph is the canonical store for
+    // selected engines. The backend regenerates
+    // .claude/skills/selected-engines/SKILL.md (which Claude consults to pick
+    // the right engine id when introducing a new engine call) from this dep
+    // list on every SetProjectDependencies write, so a single call covers
+    // both persistence and agent context.
+    //
+    // NOTE: SetProjectDependencies replaces the entire dependency list. We
+    // currently assume the engines tab owns all of a project's dependencies
+    // (no PROJECT-type deps managed elsewhere). If that changes, fetch the
+    // current deps first and merge non-engine entries.
+    const allSelected = getState().engines.selectedEngines;
+    const engineDeps = ENGINE_CATEGORIES.flatMap((cat) =>
+      allSelected[cat].map((e) => ({ id: e.id, type: cat })),
+    );
+    const depsJson = JSON.stringify(engineDeps);
+    const depsPixel = `SetProjectDependencies(project=['${projectId}'], dependencies=[${depsJson}]);`;
+
+    await runPixel(depsPixel);
   },
 );
 
@@ -220,6 +274,14 @@ const enginesSlice = createSlice({
     builder.addCase(loadSelectedModelEngines.fulfilled, (state, action) => {
       state.selectedEngines.MODEL = action.payload;
     });
+    builder.addCase(
+      loadProjectEngineDependencies.fulfilled,
+      (state, action) => {
+        for (const cat of ENGINE_CATEGORIES) {
+          state.selectedEngines[cat] = action.payload[cat];
+        }
+      },
+    );
   },
 });
 
