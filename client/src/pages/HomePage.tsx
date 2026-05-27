@@ -842,7 +842,7 @@ export const HomePage = () => {
                   </span>
                 </div>
               ) : (
-                <div className="grid max-h-[50vh] grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2">
+                <div className="flex max-h-[50vh] flex-col gap-3 overflow-y-auto">
                   {templates.map((template) => {
                     const isSelected = template.id === selectedTemplateId;
                     return (
@@ -852,9 +852,9 @@ export const HomePage = () => {
                         onClick={() => setSelectedTemplateId(template.id)}
                         className={cn(
                           "flex flex-col items-start gap-1 rounded-md border p-3 text-left transition-colors",
-                          "hover:bg-accent hover:text-accent-foreground",
+                          "hover:bg-accent/50",
                           isSelected
-                            ? "border-primary ring-2 ring-primary"
+                            ? "border-primary bg-primary/5"
                             : "border-border",
                         )}
                       >
