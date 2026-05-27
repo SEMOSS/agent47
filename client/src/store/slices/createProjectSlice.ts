@@ -25,20 +25,62 @@ type GetPixelAsyncResultFn = <O extends unknown[] | []>(
 }>;
 type GetPixelJobStreamingFn = (jobId: string) => Promise<StreamingResponse>;
 
+export interface TemplateProject {
+	id: string;
+	name: string;
+}
+
 interface CreateProjectState {
 	projectId: string;
 	projectName: string;
+	templates: TemplateProject[];
+	templatesLoading: boolean;
+	templatesError: string | null;
 }
 
 const initialState: CreateProjectState = {
 	projectId: "",
 	projectName: "",
+	templates: [],
+	templatesLoading: false,
+	templatesError: null,
 };
+
+const TEMPLATE_TAG = "Template";
+
+export const fetchTemplates = createAsyncThunk<
+	TemplateProject[],
+	{ runPixel: RunPixelFn }
+>("createProject/fetchTemplates", async ({ runPixel }) => {
+	const pixel = `MyProjects ( metaKeys = [ "tag" ] , metaFilters = [ { 'tag': '${TEMPLATE_TAG}' } ] , filterWord = [ "" ] , limit = [ 100 ] , offset = [ 0 ] ) ;`;
+	const response = await runPixel<unknown[]>(pixel);
+	if (!Array.isArray(response)) return [];
+	return response
+		.map((row): TemplateProject | null => {
+			if (!row || typeof row !== "object") return null;
+			const r = row as Record<string, unknown>;
+			const id =
+				(r.project_id as string | undefined) ??
+				(r.projectId as string | undefined) ??
+				(r.project as string | undefined) ??
+				(r.id as string | undefined) ??
+				"";
+			if (!id) return null;
+			const name =
+				(r.project_name as string | undefined) ??
+				(r.projectName as string | undefined) ??
+				(r.name as string | undefined) ??
+				id;
+			return { id, name };
+		})
+		.filter((t): t is TemplateProject => t !== null);
+});
 
 export const createReactProject = createAsyncThunk<
 	{ projectId: string },
 	{
 		projectName: string;
+		templateId: string;
 		runPixel: RunPixelFn;
 		runPixelAsync: RunPixelAsyncFn;
 		getPixelAsyncResult: GetPixelAsyncResultFn;
@@ -46,13 +88,18 @@ export const createReactProject = createAsyncThunk<
 	}
 >(
 	"createProject/createReactProject",
-	async ({ projectName, runPixel }, { dispatch }) => {
-		const createProjectPixel = `CreateAppFromTemplate ( project = '${projectName}', projectTemplate ='0f8c31e4-5c48-41e3-8570-1c4fe88a6bfe');`;
+	async ({ projectName, templateId, runPixel }) => {
+		if (!templateId) {
+			throw new Error("templateId is required");
+		}
+		const createProjectPixel = `CreateAppFromTemplate ( project = '${projectName}', projectTemplate ='${templateId}');`;
 
 		try {
-			const response = await runPixel(createProjectPixel);
+			const response = await runPixel<{ project_id?: string }>(
+				createProjectPixel,
+			);
 			console.log("CreateAppFromTemplate response:", response);
-			const projectId = response.project_id;
+			const projectId = response?.project_id;
 			if (!projectId) {
 				throw new Error("Project ID not found in response");
 			}
@@ -141,6 +188,19 @@ const createProjectSlice = createSlice({
 	extraReducers: (builder) => {
 		builder.addCase(createProject.fulfilled, (state, action) => {
 			state.projectId = action.payload.projectId;
+		});
+		builder.addCase(fetchTemplates.pending, (state) => {
+			state.templatesLoading = true;
+			state.templatesError = null;
+		});
+		builder.addCase(fetchTemplates.fulfilled, (state, action) => {
+			state.templates = action.payload;
+			state.templatesLoading = false;
+		});
+		builder.addCase(fetchTemplates.rejected, (state, action) => {
+			state.templatesLoading = false;
+			state.templatesError =
+				action.error.message ?? "Failed to load templates";
 		});
 	},
 });
