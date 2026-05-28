@@ -117,30 +117,35 @@ export const parseCompileErrorOutput = (raw: string | null | undefined): JavaIss
 
 /**
  * Builds the "ask agent to fix" prompt for selected Java compile issues.
- * Per spec: messages only — the agent can locate the affected files itself.
+ * Includes the full compiler block per issue (header + continuation lines
+ * with symbol/location context) — the first-line message alone is rarely
+ * enough to act on (e.g. "cannot find symbol" without the symbol name).
  */
 export const buildJavaIssuesRepairPrompt = (issues: JavaIssue[]): string => {
   if (issues.length === 0) {
     return "";
   }
 
-  const errorMessages = issues
+  const formatBlock = (issue: JavaIssue): string =>
+    (issue.detail && issue.detail.trim()) || issue.message;
+
+  const errorBlocks = issues
     .filter((i) => i.severity === "error")
-    .map((i) => `- ${i.message}`);
-  const warningMessages = issues
+    .map(formatBlock);
+  const warningBlocks = issues
     .filter((i) => i.severity === "warning")
-    .map((i) => `- ${i.message}`);
+    .map(formatBlock);
 
   const sections: string[] = [];
   sections.push(
-    "Fix the following Java compile issues in this project. Locate the affected files yourself.",
+    "Fix the following Java compile issues in this project. The file paths in each block are absolute paths on the server; locate the corresponding files in the project workspace.",
   );
-  if (errorMessages.length > 0) {
-    sections.push(`Errors (${errorMessages.length}):\n${errorMessages.join("\n")}`);
+  if (errorBlocks.length > 0) {
+    sections.push(`Errors (${errorBlocks.length}):\n\n${errorBlocks.join("\n\n")}`);
   }
-  if (warningMessages.length > 0) {
+  if (warningBlocks.length > 0) {
     sections.push(
-      `Warnings (${warningMessages.length}):\n${warningMessages.join("\n")}`,
+      `Warnings (${warningBlocks.length}):\n\n${warningBlocks.join("\n\n")}`,
     );
   }
   return sections.join("\n\n");
