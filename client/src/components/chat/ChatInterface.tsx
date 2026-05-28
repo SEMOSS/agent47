@@ -62,6 +62,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAppContext } from "@/contexts/AppContext";
 import { cn } from "@/lib/utils";
 import { buildIssuesRepairPrompt } from "@/lib/previewIssues";
+import { buildJavaIssuesRepairPrompt, type JavaIssue } from "@/lib/javaIssues";
 import { useAppDispatch, useAppSelector } from "@/store";
 import {
   type ChatMessage,
@@ -101,6 +102,10 @@ import {
   clearGitState,
   fetchCommitHistory,
 } from "@/store/slices/gitSlice";
+import {
+  clearJavaIssues,
+  fetchJavaIssues,
+} from "@/store/slices/javaIssuesSlice";
 import { submitAgentMessage } from "@/store/thunks/submitAgentMessage";
 import { getTranscriptEventStableKey } from "@/types/transcript";
 
@@ -477,6 +482,29 @@ export const ChatInterface = () => {
     ],
   );
 
+  const handleAskToFixJavaIssues = useCallback(
+    (issues: JavaIssue[]) => {
+      if (issues.length === 0) return;
+      setActiveTab("build");
+      dispatch(
+        submitAgentMessage({
+          message: buildJavaIssuesRepairPrompt(issues),
+          runPixel,
+          runPixelAsync,
+          getPixelAsyncResult,
+          getPixelJobStreaming,
+        }),
+      );
+    },
+    [
+      dispatch,
+      getPixelAsyncResult,
+      getPixelJobStreaming,
+      runPixel,
+      runPixelAsync,
+    ],
+  );
+
   useEffect(() => {
     if (activeTab === "issues") {
       dispatch(markAllIssuesSeen());
@@ -544,6 +572,15 @@ export const ChatInterface = () => {
         append: false,
       }),
     );
+  }, [dispatch, projectId, runPixel]);
+
+  // Refetch Java compile issues whenever the active project changes.
+  useEffect(() => {
+    if (!projectId) {
+      dispatch(clearJavaIssues());
+      return;
+    }
+    dispatch(fetchJavaIssues({ projectId, runPixel }));
   }, [dispatch, projectId, runPixel]);
 
   const fetchEngines = useCallback(
@@ -1119,7 +1156,10 @@ export const ChatInterface = () => {
           </TabsContent>
 
           <TabsContent value="issues" className="mt-0 flex flex-1 min-h-0">
-            <IssuesPanel onAskToFix={handleAskToFixIssues} />
+            <IssuesPanel
+              onAskToFix={handleAskToFixIssues}
+              onAskToFixJava={handleAskToFixJavaIssues}
+            />
           </TabsContent>
 
           <TabsContent

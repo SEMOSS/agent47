@@ -13,6 +13,7 @@ import {
   type TranscriptState,
 } from "../slices/transcriptSlice";
 import { fetchCommitHistory } from "../slices/gitSlice";
+import { fetchJavaIssues } from "../slices/javaIssuesSlice";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
 type RunPixelAsyncFn = (pixelString: string) => Promise<{ jobId: string }>;
@@ -307,6 +308,13 @@ export const runAgentHarness = createAsyncThunk<
             runPixel: runPixel as <T = unknown>(p: string) => Promise<T>,
             offset: 0,
             append: false,
+          }),
+        );
+        // Refresh Java compile issues so the panel reflects the post-agent state.
+        dispatch(
+          fetchJavaIssues({
+            projectId: targetProjectId,
+            runPixel: runPixel as <T = unknown>(p: string) => Promise<T>,
           }),
         );
       }

@@ -23,6 +23,7 @@ import {
   formatIssueTimestamp,
   getIssueKindLabel,
 } from "@/lib/previewIssues";
+import type { JavaIssue } from "@/lib/javaIssues";
 import {
   deleteIssue,
   markIssueReviewed,
@@ -30,10 +31,11 @@ import {
 } from "@/store/slices/issuesSlice";
 import { cn } from "@/lib/utils";
 
-type IssuesFilter = "all" | "app" | "api";
+type IssuesFilter = "all" | "app" | "api" | "java";
 
 type IssuesPanelProps = {
   onAskToFix: (issueIds: string[]) => void;
+  onAskToFixJava: (issues: JavaIssue[]) => void;
 };
 
 const filterMatches = (record: PreviewIssueRecord, filter: IssuesFilter) => {
@@ -92,17 +94,39 @@ const formatIssueDetailValue = (value: unknown): string => {
   return JSON.stringify(candidate, null, 2);
 };
 
-export const IssuesPanel = ({ onAskToFix }: IssuesPanelProps) => {
+export const IssuesPanel = ({
+  onAskToFix,
+  onAskToFixJava,
+}: IssuesPanelProps) => {
   const dispatch = useAppDispatch();
   const records = useAppSelector(selectIssues);
   const capability = useAppSelector((state) => state.issues.capability);
+  const javaItems = useAppSelector((state) => state.javaIssues.items);
   const [filter, setFilter] = useState<IssuesFilter>("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedJavaIds, setSelectedJavaIds] = useState<string[]>([]);
   const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
+  const [showJavaWarnings, setShowJavaWarnings] = useState(false);
 
   const filteredRecords = useMemo(
-    () => records.filter((record) => filterMatches(record, filter)),
+    () =>
+      filter === "java"
+        ? []
+        : records.filter((record) => filterMatches(record, filter)),
     [filter, records],
+  );
+
+  const javaErrorCount = useMemo(
+    () => javaItems.filter((i) => i.severity === "error").length,
+    [javaItems],
+  );
+  const javaWarningCount = javaItems.length - javaErrorCount;
+  const visibleJavaItems = useMemo(
+    () =>
+      showJavaWarnings
+        ? javaItems
+        : javaItems.filter((i) => i.severity === "error"),
+    [javaItems, showJavaWarnings],
   );
 
   const detailRecord =
@@ -116,6 +140,12 @@ export const IssuesPanel = ({ onAskToFix }: IssuesPanelProps) => {
     );
   }, [filteredRecords]);
 
+  useEffect(() => {
+    setSelectedJavaIds((previous) =>
+      previous.filter((id) => visibleJavaItems.some((item) => item.id === id)),
+    );
+  }, [visibleJavaItems]);
+
   const toggleSelectedId = (id: string, nextChecked: boolean) => {
     setSelectedIds((previous) =>
       nextChecked
@@ -124,13 +154,31 @@ export const IssuesPanel = ({ onAskToFix }: IssuesPanelProps) => {
     );
   };
 
+  const toggleSelectedJavaId = (id: string, nextChecked: boolean) => {
+    setSelectedJavaIds((previous) =>
+      nextChecked
+        ? Array.from(new Set([...previous, id]))
+        : previous.filter((existingId) => existingId !== id),
+    );
+  };
+
   const handleAskSelected = () => {
-    if (selectedIds.length === 0) {
+    if (filter === "java") {
+      const picked = javaItems.filter((i) =>
+        selectedJavaIds.includes(i.id),
+      );
+      if (picked.length === 0) return;
+      onAskToFixJava(picked);
       return;
     }
-
+    if (selectedIds.length === 0) return;
     onAskToFix(selectedIds);
   };
+
+  const askDisabled =
+    filter === "java"
+      ? selectedJavaIds.length === 0
+      : selectedIds.length === 0;
 
   return (
     <>
@@ -148,7 +196,7 @@ export const IssuesPanel = ({ onAskToFix }: IssuesPanelProps) => {
             <Button
               variant="outline"
               size="sm"
-              disabled={selectedIds.length === 0}
+              disabled={askDisabled}
               onClick={handleAskSelected}
               className="gap-2"
             >
@@ -162,6 +210,7 @@ export const IssuesPanel = ({ onAskToFix }: IssuesPanelProps) => {
               ["all", "All"],
               ["app", "App"],
               ["api", "API"],
+              ["java", "Java"],
             ] as const).map(([value, label]) => (
               <Button
                 key={value}
@@ -169,15 +218,114 @@ export const IssuesPanel = ({ onAskToFix }: IssuesPanelProps) => {
                 size="sm"
                 variant={filter === value ? "default" : "outline"}
                 onClick={() => setFilter(value)}
+                className="gap-1.5"
               >
                 {label}
+                {value === "java" && javaErrorCount > 0 ? (
+                  <Badge
+                    variant="destructive"
+                    className="px-1.5 py-0 text-[10px] leading-4"
+                  >
+                    {javaErrorCount}
+                  </Badge>
+                ) : null}
               </Button>
             ))}
+            {filter === "java" && javaWarningCount > 0 ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowJavaWarnings((v) => !v)}
+                className="ml-auto"
+              >
+                {showJavaWarnings
+                  ? `Hide warnings (${javaWarningCount})`
+                  : `Show warnings (${javaWarningCount})`}
+              </Button>
+            ) : null}
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-4">
-          {filteredRecords.length === 0 ? (
+          {filter === "java" ? (
+            visibleJavaItems.length === 0 ? (
+              <Card className="border-dashed bg-slate-50/70 dark:bg-zinc-900/40">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">
+                    {javaItems.length === 0
+                      ? "No Java compile issues"
+                      : "No errors — warnings hidden"}
+                  </CardTitle>
+                  <CardDescription>
+                    {javaItems.length === 0
+                      ? "If this project has Java reactors, they're compiling cleanly. The file `classes/compileerror.out` is empty or missing."
+                      : `${javaWarningCount} warning${javaWarningCount === 1 ? "" : "s"} hidden. Click "Show warnings" to view them.`}
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            ) : (
+              <div className="space-y-3">
+                {visibleJavaItems.map((item) => {
+                  const isSelected = selectedJavaIds.includes(item.id);
+                  const fileName =
+                    item.filePath.split("/").pop() ?? item.filePath;
+                  return (
+                    <Card
+                      key={item.id}
+                      className="border-slate-200/60 dark:border-white/10 shadow-sm"
+                    >
+                      <CardHeader className="space-y-3 pb-4">
+                        <div className="flex items-start gap-3">
+                          <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={(checked) =>
+                              toggleSelectedJavaId(item.id, checked === true)
+                            }
+                            className="mt-1"
+                          />
+                          <div className="min-w-0 flex-1 space-y-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge
+                                variant={
+                                  item.severity === "error"
+                                    ? "destructive"
+                                    : "secondary"
+                                }
+                              >
+                                {item.severity === "error" ? "Error" : "Warning"}
+                              </Badge>
+                              <CardTitle className="text-sm leading-5">
+                                {fileName}
+                                {item.line !== null ? `:${item.line}` : ""}
+                              </CardTitle>
+                            </div>
+                            <CardDescription className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
+                              {item.detail || item.message}
+                            </CardDescription>
+                            <p className="truncate text-[11px] text-muted-foreground">
+                              {item.filePath}
+                            </p>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-2"
+                          onClick={() => onAskToFixJava([item])}
+                        >
+                          <MessageSquareWarning className="h-4 w-4" />
+                          Ask agent to fix
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )
+          ) : filteredRecords.length === 0 ? (
             <Card className="border-dashed bg-slate-50/70 dark:bg-zinc-900/40">
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">No issues yet</CardTitle>
