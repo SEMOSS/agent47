@@ -123,25 +123,6 @@ export const fetchEnginesByType = createAsyncThunk<
   return { type, items, filterWord: search };
 });
 
-export const loadSelectedModelEngines = createAsyncThunk<
-  EngineItem[],
-  { projectId: string; runPixel: RunPixelFn }
->("engines/loadSelectedModelEngines", async ({ projectId, runPixel }) => {
-  const pixel = `GetSelectedModelEngines(project='${projectId}');`;
-  const response = await runPixel<unknown>(pixel);
-  if (!Array.isArray(response)) return [];
-  return response
-    .map((row): EngineItem | null => {
-      if (!row || typeof row !== "object") return null;
-      const r = row as Record<string, unknown>;
-      const id = r.id;
-      if (typeof id !== "string" || !id) return null;
-      const name = typeof r.name === "string" && r.name ? r.name : id;
-      return { id, name, subtype: "", type: "MODEL" };
-    })
-    .filter((e): e is EngineItem => e !== null);
-});
-
 // Re-hydrates all four engine categories from the SEMOSS project's native
 // dependency graph (GetProjectDependencies). This is the source of truth
 // for engine connections across refreshes — saveSelectedEngines mirrors
@@ -270,9 +251,6 @@ const enginesSlice = createSlice({
     });
     builder.addCase(fetchEnginesByType.rejected, (state, action) => {
       state.browse[action.meta.arg.type].isLoading = false;
-    });
-    builder.addCase(loadSelectedModelEngines.fulfilled, (state, action) => {
-      state.selectedEngines.MODEL = action.payload;
     });
     builder.addCase(
       loadProjectEngineDependencies.fulfilled,
