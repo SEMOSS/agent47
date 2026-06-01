@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { useAppContext } from "@/contexts";
 import { attachPreviewIssues } from "@/lib/previewIssues";
 import { cn } from "@/lib/utils";
@@ -25,7 +26,10 @@ import {
   readLastRoomId,
   setActiveProject,
 } from "@/store/slices/chatSlice";
-import { createReactProject } from "@/store/slices/createProjectSlice";
+import {
+  createReactProject,
+  fetchTemplates,
+} from "@/store/slices/createProjectSlice";
 import {
   capturePreviewIssue,
   setPreviewIssueCapability,
@@ -204,6 +208,13 @@ export const HomePage = () => {
   const [isProjectSearchLoading, setIsProjectSearchLoading] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [createStep, setCreateStep] = useState<1 | 2>(1);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  const templates = useAppSelector((state) => state.createProject.templates);
+  const templatesLoading = useAppSelector(
+    (state) => state.createProject.templatesLoading,
+  );
+  const selectedTemplate = templates.find((t) => t.id === selectedTemplateId);
   const [isBuilding, setIsBuilding] = useState(false);
   const [viewportMode, setViewportMode] = useState<ViewportMode>("desktop");
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -319,6 +330,12 @@ export const HomePage = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, [isFullscreen]);
 
+  // Fetch templates whenever the create-project dialog opens.
+  useEffect(() => {
+    if (!isCreateProjectOpen) return;
+    void dispatch(fetchTemplates({ runPixel }));
+  }, [isCreateProjectOpen, dispatch, runPixel]);
+
   const handleBuildAndPublish = useCallback(async () => {
     if (!projectId || isBuilding) return;
     setIsBuilding(true);
@@ -336,7 +353,7 @@ export const HomePage = () => {
   }, [projectId, isBuilding, runPixel, dispatch]);
 
   const handleCreateProject = useCallback(async () => {
-    if (!trimmedProjectName || isCreatingProject) {
+    if (!trimmedProjectName || isCreatingProject || !selectedTemplateId) {
       return;
     }
 
@@ -345,6 +362,7 @@ export const HomePage = () => {
       await dispatch(
         createReactProject({
           projectName: trimmedProjectName,
+          templateId: selectedTemplateId,
           runPixel,
           runPixelAsync,
           getPixelAsyncResult,
@@ -354,6 +372,8 @@ export const HomePage = () => {
       dispatch(queryMyProjects({ runPixel }));
       setIsCreateProjectOpen(false);
       setNewProjectName("");
+      setSelectedTemplateId("");
+      setCreateStep(1);
     } catch (error) {
       console.error("Failed to create project:", error);
     } finally {
@@ -367,7 +387,15 @@ export const HomePage = () => {
     getPixelAsyncResult,
     getPixelJobStreaming,
     trimmedProjectName,
+    selectedTemplateId,
   ]);
+
+  const handleCloseCreateDialog = useCallback(() => {
+    setIsCreateProjectOpen(false);
+    setCreateStep(1);
+    setSelectedTemplateId("");
+    setNewProjectName("");
+  }, []);
 
   const handleCreateProjectSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
@@ -775,52 +803,145 @@ export const HomePage = () => {
       <Dialog
         open={isCreateProjectOpen}
         onOpenChange={(nextOpen) => {
-          if (!isCreatingProject) {
-            setIsCreateProjectOpen(nextOpen);
+          if (isCreatingProject) return;
+          if (!nextOpen) {
+            handleCloseCreateDialog();
+          } else {
+            setIsCreateProjectOpen(true);
           }
         }}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Create New Project</DialogTitle>
             <DialogDescription>
-              Start a fresh workspace with a clear project name.
+              {createStep === 1
+                ? "Choose a template to start from."
+                : "Name your new project."}
             </DialogDescription>
           </DialogHeader>
-          <form
-            className="space-y-4"
-            onSubmit={handleCreateProjectSubmit}
-            autoComplete="off"
-          >
-            <div className="space-y-2">
-              <Label htmlFor="new-project-name">Project Name</Label>
-              <Input
-                id="new-project-name"
-                name="agent47-project-name"
-                placeholder="New project"
-                value={newProjectName}
-                onChange={(event) => setNewProjectName(event.target.value)}
-                autoComplete="off"
-                data-1p-ignore="true"
-                data-lpignore="true"
-                spellCheck={false}
-                autoFocus
-              />
+
+          {createStep === 1 ? (
+            <div className="space-y-4">
+              {templatesLoading ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+                  <Spinner className="size-5" />
+                  <span>Loading templates…</span>
+                </div>
+              ) : templates.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-1 py-12 text-center text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">
+                    No templates available.
+                  </span>
+                  <span>
+                    Tag a project with{" "}
+                    <code className="rounded bg-muted px-1 py-0.5 text-xs">
+                      Template
+                    </code>{" "}
+                    to use it as a starting point.
+                  </span>
+                </div>
+              ) : (
+                <div className="flex max-h-[50vh] flex-col gap-3 overflow-y-auto">
+                  {templates.map((template) => {
+                    const isSelected = template.id === selectedTemplateId;
+                    return (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => setSelectedTemplateId(template.id)}
+                        className={cn(
+                          "flex flex-col items-start gap-1 rounded-md border p-3 text-left transition-colors",
+                          "hover:bg-accent/50",
+                          isSelected
+                            ? "border-primary bg-primary/5"
+                            : "border-border",
+                        )}
+                      >
+                        <span className="line-clamp-2 font-medium">
+                          {template.name}
+                        </span>
+                        <span className="truncate font-mono text-xs text-muted-foreground">
+                          {template.id}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleCloseCreateDialog}
+                  disabled={isCreatingProject}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => setCreateStep(2)}
+                  disabled={!selectedTemplateId || templatesLoading}
+                >
+                  Next
+                </Button>
+              </DialogFooter>
             </div>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setIsCreateProjectOpen(false)}
-                disabled={isCreatingProject}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={isCreateDisabled}>
-                {isCreatingProject ? "Creating..." : "Create project"}
-              </Button>
-            </DialogFooter>
-          </form>
+          ) : (
+            <form
+              className="space-y-4"
+              onSubmit={handleCreateProjectSubmit}
+              autoComplete="off"
+            >
+              {selectedTemplate && (
+                <div className="text-xs text-muted-foreground">
+                  Template:{" "}
+                  <span className="font-medium text-foreground">
+                    {selectedTemplate.name}
+                  </span>
+                </div>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="new-project-name">Project Name</Label>
+                <Input
+                  id="new-project-name"
+                  name="agent47-project-name"
+                  placeholder="New project"
+                  value={newProjectName}
+                  onChange={(event) => setNewProjectName(event.target.value)}
+                  autoComplete="off"
+                  data-1p-ignore="true"
+                  data-lpignore="true"
+                  spellCheck={false}
+                  autoFocus
+                />
+              </div>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setCreateStep(1)}
+                  disabled={isCreatingProject}
+                >
+                  Back
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleCloseCreateDialog}
+                  disabled={isCreatingProject}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={isCreateDisabled || !selectedTemplateId}
+                >
+                  {isCreatingProject ? "Creating..." : "Create project"}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
 
