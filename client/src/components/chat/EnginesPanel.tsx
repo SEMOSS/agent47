@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAppContext } from "@/contexts/AppContext";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   type EngineCategory,
   removeSelectedEngine,
+  saveSelectedEngines,
 } from "@/store/slices/enginesSlice";
 import { EngineSelectionDialog } from "./EngineSelectionDialog";
 import { getCategoryIcon, getEngineIcon } from "./engineIcon";
@@ -60,9 +62,20 @@ const CATEGORIES: CategoryConfig[] = [
 export function EnginesPanel() {
   const [openCategory, setOpenCategory] = useState<EngineCategory | null>(null);
   const dispatch = useAppDispatch();
+  const { runPixel } = useAppContext();
   const selectedEngines = useAppSelector(
     (state) => state.engines.selectedEngines,
   );
+  const projectId = useAppSelector((state) => state.chat.projectId);
+
+  const handleRemoveEngine = (category: EngineCategory, engineId: string) => {
+    dispatch(removeSelectedEngine({ type: category, engineId }));
+    if (!projectId) return;
+    // Reducer update is synchronous, so by the time saveSelectedEngines reads
+    // state.engines.selectedEngines it sees the post-removal snapshot. The
+    // backend dep write triggers selected-engines skill regeneration.
+    void dispatch(saveSelectedEngines({ projectId, runPixel }));
+  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -132,12 +145,7 @@ export function EnginesPanel() {
                               type="button"
                               className="ml-0.5 rounded-full p-0.5 text-slate-500 hover:bg-slate-200 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-zinc-700 dark:hover:text-slate-100"
                               onClick={() =>
-                                dispatch(
-                                  removeSelectedEngine({
-                                    type: config.category,
-                                    engineId: engine.id,
-                                  }),
-                                )
+                                handleRemoveEngine(config.category, engine.id)
                               }
                               aria-label={`Remove ${engine.name}`}
                             >

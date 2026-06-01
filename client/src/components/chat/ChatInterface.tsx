@@ -96,7 +96,7 @@ import {
   querySkills,
   updateSkill,
 } from "@/store/slices/skillsSlice";
-import { loadSelectedModelEngines } from "@/store/slices/enginesSlice";
+import { loadProjectEngineDependencies } from "@/store/slices/enginesSlice";
 import {
   clearGitState,
   fetchCommitHistory,
@@ -525,9 +525,10 @@ export const ChatInterface = () => {
     }
     if (loadedSelectedEnginesProjectIdRef.current === projectId) return;
     loadedSelectedEnginesProjectIdRef.current = projectId;
-    void dispatch(loadSelectedModelEngines({ projectId, runPixel })).unwrap()
+    void dispatch(loadProjectEngineDependencies({ projectId, runPixel }))
+      .unwrap()
       .catch((error) => {
-        console.error("Failed to load selected model engines:", error);
+        console.error("Failed to load project engine dependencies:", error);
         loadedSelectedEnginesProjectIdRef.current = null;
       });
   }, [dispatch, projectId, runPixel]);

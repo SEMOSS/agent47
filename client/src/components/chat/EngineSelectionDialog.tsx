@@ -79,8 +79,6 @@ export function EngineSelectionDialog({
         void dispatch(
           saveSelectedEngines({
             projectId,
-            category,
-            engines: selected,
             runPixel,
           }),
         )
