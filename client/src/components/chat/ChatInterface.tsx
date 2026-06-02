@@ -28,6 +28,7 @@ import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
 import { IssuesPanel } from "@/components/chat/IssuesPanel";
 import { EnginesPanel } from "@/components/chat/EnginesPanel";
+import { HooksPanel } from "@/components/chat/HooksPanel";
 import { HistoryPanel } from "@/components/chat/HistoryPanel";
 import { LatestCommitChip } from "@/components/chat/LatestCommitChip";
 import { ConfirmationDialog } from "@/library/ConfirmationDialog";
@@ -1037,6 +1038,7 @@ export const ChatInterface = () => {
                   ) : null}
                 </TabsTrigger>
                 <TabsTrigger value="engines">Engines</TabsTrigger>
+                <TabsTrigger value="hooks">Hooks</TabsTrigger>
                 <TabsTrigger value="history">History</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
               </TabsList>
@@ -1128,6 +1130,13 @@ export const ChatInterface = () => {
             className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 p-4 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
           >
             <EnginesPanel />
+          </TabsContent>
+
+          <TabsContent
+            value="hooks"
+            className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
+          >
+            <HooksPanel />
           </TabsContent>
 
           <TabsContent value="history" className="mt-0 flex flex-1 min-h-0">
