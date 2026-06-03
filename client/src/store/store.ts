@@ -9,6 +9,7 @@ import issuesReducer from "./slices/issuesSlice";
 import enginesReducer from "./slices/enginesSlice";
 import gitReducer from "./slices/gitSlice";
 import hooksReducer from "./slices/hooksSlice";
+import agentsReducer from "./slices/agentsSlice";
 
 export const store = configureStore({
 	reducer: {
@@ -22,6 +23,7 @@ export const store = configureStore({
 		engines: enginesReducer,
 		git: gitReducer,
 		hooks: hooksReducer,
+		agents: agentsReducer,
 	},
 });
 
