@@ -7,11 +7,19 @@ import {
 type RunPixelFn = <T = unknown>(pixelString: string) => Promise<T>;
 
 /**
- * One agent (workspace) entry returned by
- * `META | MyProjects(... type="WORKSPACE" ...)`. The pixel response uses
- * `project_*` field names (sometimes `app_*` on older servers); we
- * normalize to `{ workspaceId, name }` so downstream components don't
- * have to care about server-side naming drift.
+ * One agent (workspace) entry. Sourced from `ListWorkspaces`, which reads
+ * the inference-tracking {@code WORKSPACE} table — the same table that
+ * backs {@code GetAgentHooks} / {@code SetAgentHooks}.
+ *
+ * <p><b>Important:</b> we deliberately do NOT use {@code META | MyProjects}
+ * here, even though it also exposes "workspace"-typed entries.
+ * {@code MyProjects} returns rows from the SEMOSS project catalog
+ * ({@code PROJECT} table), while the agent's hook + system-prompt + MCP
+ * config lives in a separate {@code WORKSPACE} table. The two are NOT
+ * synchronized: a project with {@code projectType=WORKSPACE} created via
+ * {@code CreateProject} does not get a corresponding {@code WORKSPACE}
+ * row, so {@code GetAgentHooks} would 404 against it. Always create
+ * agents via {@code AddWorkspace} (writes both tables atomically).
  */
 export interface AgentEntry {
   workspaceId: string;
@@ -29,56 +37,44 @@ const initialState: AgentsState = {
 };
 
 /**
- * Defensive normalizer: the META | MyProjects response shape can vary
- * across server versions (`project_id` vs `projectId` vs `app_id`, and
- * similar for name). Mirror `getProjectId`/`getProjectName` from
- * HomePage.tsx so the picker keeps working if a server is upgraded.
+ * Extract workspace entries from a `ListWorkspaces` response. The reactor
+ * returns a MAP shaped {@code { workspaces: [...], total_row_count: N }};
+ * we normalize each row to {@code { workspaceId, name }}.
  */
 function normalize(raw: unknown): AgentEntry[] {
-  if (!Array.isArray(raw)) return [];
+  if (!raw || typeof raw !== "object") return [];
+  const r = raw as { workspaces?: unknown };
+  const list = Array.isArray(r.workspaces) ? r.workspaces : [];
   const out: AgentEntry[] = [];
-  for (const row of raw) {
+  for (const row of list) {
     if (!row || typeof row !== "object") continue;
-    const r = row as Record<string, unknown>;
-    const id =
-      (r.project_id as string) ??
-      (r.projectId as string) ??
-      (r.project as string) ??
-      (r.app_id as string) ??
-      (r.id as string) ??
-      "";
+    const w = row as Record<string, unknown>;
+    const id = typeof w.workspace_id === "string" ? w.workspace_id : "";
     const name =
-      (r.project_name as string) ??
-      (r.projectName as string) ??
-      (r.app_name as string) ??
-      (r.name as string) ??
-      "";
-    if (typeof id === "string" && id.trim().length > 0) {
-      out.push({ workspaceId: id, name: name || id });
-    }
+      typeof w.name === "string" && w.name.length > 0 ? w.name : id;
+    if (id) out.push({ workspaceId: id, name });
   }
   return out;
 }
 
 /**
  * Fetch the user's agents (workspaces). Pixel:
- * `META | MyProjects(filterWord=["<encode></encode>"], type="WORKSPACE",
- *  limit=[25], offset=[0])`.
+ * `ListWorkspaces(limit=[25], offset=[0])`.
  */
 export const fetchAgents = createAsyncThunk<
   { agents: AgentEntry[] },
   { runPixel: RunPixelFn }
 >("agents/fetchAgents", async ({ runPixel }) => {
-  const pixel = `META | MyProjects(filterWord=["<encode></encode>"], type="WORKSPACE", limit=[25], offset=[0]);`;
+  const pixel = `ListWorkspaces(limit=[25], offset=[0]);`;
   const response = await runPixel(pixel);
   return { agents: normalize(response) };
 });
 
 /**
- * Create a new workspace-typed project, then return the new id so the
- * caller can `setWorkspaceId(newId)` immediately. Reuses the existing
- * `CreateProject` reactor (the same one Build → New Project uses for
- * CODE projects) with `projectType=['WORKSPACE']` instead of `['CODE']`.
+ * Create a new agent via {@code AddWorkspace(name='X')}. The reactor
+ * generates the workspace_id, inserts rows in both the project catalog
+ * AND the inference-tracking {@code WORKSPACE} table, and returns the
+ * id as a CONST_STRING. The new id is then set as the active workspace.
  */
 export const createAgent = createAsyncThunk<
   { workspaceId: string; name: string },
@@ -88,16 +84,25 @@ export const createAgent = createAsyncThunk<
   if (trimmed.length === 0) {
     throw new Error("Agent name is required");
   }
-  // Escape single quotes to avoid breaking the pixel string.
+  // Escape single quotes so the pixel string stays well-formed.
   const safe = trimmed.replace(/'/g, "\\'");
-  const pixel = `CreateProject(project='${safe}', portal=['true'], projectType=['WORKSPACE']);`;
-  const response = (await runPixel(pixel)) as
-    | { project_id?: string; projectId?: string; id?: string }
-    | undefined;
-  const workspaceId =
-    response?.project_id ?? response?.projectId ?? response?.id ?? "";
+  const pixel = `AddWorkspace(name='${safe}');`;
+  const response = await runPixel(pixel);
+
+  // AddWorkspace returns a String wrapped in either a NounMetadata-style
+  // payload or just the raw id, depending on how the runPixel adapter
+  // unwraps it. Be defensive.
+  let workspaceId = "";
+  if (typeof response === "string") {
+    workspaceId = response;
+  } else if (response && typeof response === "object") {
+    const r = response as Record<string, unknown>;
+    if (typeof r.workspace_id === "string") workspaceId = r.workspace_id;
+    else if (typeof r.value === "string") workspaceId = r.value;
+    else if (typeof r.output === "string") workspaceId = r.output;
+  }
   if (!workspaceId) {
-    throw new Error("CreateProject did not return a project_id");
+    throw new Error("AddWorkspace did not return a workspace id");
   }
   return { workspaceId, name: trimmed };
 });
@@ -123,8 +128,8 @@ const agentsSlice = createSlice({
     });
     builder.addCase(createAgent.fulfilled, (state, action) => {
       // Optimistically prepend so the new agent shows up immediately;
-      // a follow-up fetchAgents() will overwrite this with the server's
-      // canonical list (including any auto-populated metadata).
+      // the next fetchAgents() refresh will overwrite this with the
+      // server's canonical list.
       state.agents = [
         { workspaceId: action.payload.workspaceId, name: action.payload.name },
         ...state.agents,
