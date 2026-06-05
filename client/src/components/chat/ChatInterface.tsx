@@ -97,10 +97,7 @@ import {
   updateSkill,
 } from "@/store/slices/skillsSlice";
 import { loadProjectEngineDependencies } from "@/store/slices/enginesSlice";
-import {
-  clearGitState,
-  fetchCommitHistory,
-} from "@/store/slices/gitSlice";
+import { clearGitState, fetchCommitHistory } from "@/store/slices/gitSlice";
 import { submitAgentMessage } from "@/store/thunks/submitAgentMessage";
 import { getTranscriptEventStableKey } from "@/types/transcript";
 
@@ -430,19 +427,22 @@ export const ChatInterface = () => {
     [dispatch],
   );
 
-  const handleCopyTechnicalDetail = useCallback(async (label: string, value: string) => {
-    if (!value) {
-      return;
-    }
+  const handleCopyTechnicalDetail = useCallback(
+    async (label: string, value: string) => {
+      if (!value) {
+        return;
+      }
 
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.success(`${label} copied`);
-    } catch (error) {
-      console.error(`Failed to copy ${label}:`, error);
-      toast.error(`Failed to copy ${label.toLowerCase()}.`);
-    }
-  }, []);
+      try {
+        await navigator.clipboard.writeText(value);
+        toast.success(`${label} copied`);
+      } catch (error) {
+        console.error(`Failed to copy ${label}:`, error);
+        toast.error(`Failed to copy ${label.toLowerCase()}.`);
+      }
+    },
+    [],
+  );
 
   const handleAskToFixIssues = useCallback(
     (issueIds: string[]) => {
@@ -553,7 +553,7 @@ export const ChatInterface = () => {
       try {
         const metaFilters = `[[{"tag":"text-generation"}]]`;
         const pixel = search.trim()
-          ? `MyEngines(filterWord=["<encode>${search.trim()}</encode>"], engineTypes=["MODEL"], metaFilters=[${metaFilters}], limit=[15], offset=[0]);`
+          ? `MyEngines(filterWord=["${search.trim()}"], engineTypes=["MODEL"], metaFilters=[${metaFilters}], limit=[15], offset=[0]);`
           : `MyEngines(engineTypes=["MODEL"], metaFilters=[${metaFilters}], limit=[15], offset=[0]);`;
         const engines = await runPixel<
           Array<{
@@ -607,7 +607,7 @@ export const ChatInterface = () => {
         const engines = await runPixel<
           Array<{ engine_id: string; engine_display_name: string }>
         >(
-          `MyEngines(filterWord=["<encode>${engineId}</encode>"], engineTypes=["MODEL"], limit=[1], offset=[0]);`,
+          `MyEngines(filterWord=["${engineId}"], engineTypes=["MODEL"], limit=[1], offset=[0]);`,
         );
         if (!cancelled && engines?.length) {
           dispatch(setEngineDisplayName(engines[0].engine_display_name));
@@ -668,13 +668,7 @@ export const ChatInterface = () => {
     );
 
     return [...selectedMcps, ...pinnedButNotSelected, ...pagedItems];
-  }, [
-    availableMcps,
-    pinnedMcps,
-    pinnedMcpIds,
-    selectedMcps,
-    selectedMcpIds,
-  ]);
+  }, [availableMcps, pinnedMcps, pinnedMcpIds, selectedMcps, selectedMcpIds]);
 
   const handleMcpListScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
@@ -993,12 +987,7 @@ export const ChatInterface = () => {
           value={activeTab}
           onValueChange={(value) =>
             setActiveTab(
-              value as
-                | "build"
-                | "issues"
-                | "engines"
-                | "history"
-                | "settings",
+              value as "build" | "issues" | "engines" | "history" | "settings",
             )
           }
           className="relative flex h-full flex-col"
@@ -1145,7 +1134,8 @@ export const ChatInterface = () => {
                 </p>
                 <h2 className="text-lg font-semibold">Workspace settings</h2>
                 <p className="text-sm text-muted-foreground">
-                  Choose your assistant, pick a model, and open advanced tools when you need them.
+                  Choose your assistant, pick a model, and open advanced tools
+                  when you need them.
                 </p>
               </div>
 
@@ -1273,606 +1263,628 @@ export const ChatInterface = () => {
 
               {isAdvancedOpen ? (
                 <>
-              <div className="space-y-2">
-                <Label htmlFor="system-prompt">System Prompt</Label>
-                <Textarea
-                  id="system-prompt"
-                  rows={4}
-                  value={systemPrompt}
-                  onChange={(event) =>
-                    dispatch(setSystemPrompt(event.target.value))
-                  }
-                />
-              </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="system-prompt">System Prompt</Label>
+                    <Textarea
+                      id="system-prompt"
+                      rows={4}
+                      value={systemPrompt}
+                      onChange={(event) =>
+                        dispatch(setSystemPrompt(event.target.value))
+                      }
+                    />
+                  </div>
 
-              <div className="space-y-2">
-                <Dialog
-                  open={isConfigurationOpen}
-                  onOpenChange={setIsConfigurationOpen}
-                >
-                  <DialogTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className="w-full justify-start gap-2"
+                  <div className="space-y-2">
+                    <Dialog
+                      open={isConfigurationOpen}
+                      onOpenChange={setIsConfigurationOpen}
                     >
-                      <Settings className="h-4 w-4" />
-                      Configuration
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Configuration</DialogTitle>
-                      <DialogDescription>
-                        Configure permission mode and workspace binding for this
-                        chat.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="permission-mode">Permission Mode</Label>
-                        <Select
-                          value={permissionMode}
-                          onValueChange={(value) => {
-                            if (isPermissionMode(value)) {
-                              dispatch(setPermissionMode(value));
-                            }
-                          }}
+                      <DialogTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="w-full justify-start gap-2"
                         >
-                          <SelectTrigger id="permission-mode">
-                            <SelectValue placeholder="Select permission mode" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {PERMISSION_MODE_OPTIONS.map((option) => (
-                              <SelectItem
-                                key={option.value}
-                                value={option.value}
-                              >
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="workspace-id">Workspace ID</Label>
-                        <Input
-                          id="workspace-id"
-                          value={workspaceId}
-                          placeholder="e.g. 228b439d-3d68-4d22-aaa0-10252c39045d"
-                          onChange={(event) =>
-                            dispatch(setWorkspaceId(event.target.value.trim()))
-                          }
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Optional. When set, drives the agent's server-side
-                          config (subdir, hooks, MCPs, system prompt) from
-                          WORKSPACE.CONFIG_JSON. Leave blank for legacy
-                          behavior.
-                        </p>
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setIsConfigurationOpen(false)}
-                      >
-                        Close
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-
-                <Dialog
-                  open={isMcpOpen}
-                  onOpenChange={(open) => {
-                    setIsMcpOpen(open);
-                    if (!open) {
-                      dispatch(resetMcpPickerState());
-                    }
-                  }}
-                >
-                  <DialogTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className="w-full justify-start gap-2"
-                    >
-                      <Search className="h-4 w-4" />
-                      MCPs
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>MCPs</DialogTitle>
-                      <DialogDescription>
-                        Search and select the MCPs available to this workspace.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-3">
-                      <Input
-                        placeholder="Search MCPs..."
-                        value={mcpSearch}
-                        onChange={(event) =>
-                          dispatch(setMcpSearch(event.target.value))
-                        }
-                        className="h-8 text-sm"
-                        autoFocus
-                      />
-                      {orderedMcps.length === 0 && !isLoadingMcps ? (
-                        <p className="text-xs text-muted-foreground">
-                          {mcpSearch
-                            ? "No MCPs match your search."
-                            : "No MCPs available for this workspace yet."}
-                        </p>
-                      ) : (
-                        <div
-                          className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-2"
-                          onScroll={handleMcpListScroll}
-                        >
-                          {orderedMcps.map((mcp) => {
-                            const isSelected = selectedMcpIds.has(mcp.id);
-                            return (
-                              <label
-                                key={mcp.id}
-                                className={cn(
-                                  "flex items-center gap-2 rounded-md px-2 py-1 text-sm transition hover:bg-accent/40",
-                                  isSelected && "bg-accent/60",
-                                )}
-                              >
-                                <Checkbox
-                                  checked={isSelected}
-                                  onCheckedChange={(checked) =>
-                                    handleToggleMcp(mcp, checked === true)
-                                  }
-                                />
-                                <div className="min-w-0">
-                                  <span className="block truncate">
-                                    {mcp.name}
-                                  </span>
-                                  <span className="block text-[11px] uppercase tracking-wide text-muted-foreground">
-                                    {mcp.type}
-                                  </span>
-                                </div>
-                              </label>
-                            );
-                          })}
-                          {isLoadingMcps ? (
-                            <div className="px-2 py-1 text-xs text-muted-foreground">
-                              Loading MCPs...
-                            </div>
-                          ) : null}
-                        </div>
-                      )}
-                    </div>
-                    <DialogFooter>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setIsMcpOpen(false)}
-                      >
-                        Close
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-
-                <Dialog open={isSkillsOpen} onOpenChange={setIsSkillsOpen}>
-                  <DialogTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className="w-full justify-start gap-2"
-                      disabled={!projectId}
-                    >
-                      <BookOpen className="h-4 w-4" />
-                      View Skills
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="flex h-[78vh] w-[92vw] max-w-5xl flex-col">
-                    <DialogHeader>
-                      <DialogTitle>Project Skills</DialogTitle>
-                      <DialogDescription></DialogDescription>
-                    </DialogHeader>
-                    <div className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-1">
-                      {isLoadingSkills ? (
-                        <p className="text-sm text-muted-foreground">
-                          Loading skills...
-                        </p>
-                      ) : skillsError ? (
-                        <p className="text-sm text-destructive">
-                          {skillsError}
-                        </p>
-                      ) : !hasSkillsContent ? (
+                          <Settings className="h-4 w-4" />
+                          Configuration
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Configuration</DialogTitle>
+                          <DialogDescription>
+                            Configure permission mode and workspace binding for
+                            this chat.
+                          </DialogDescription>
+                        </DialogHeader>
                         <div className="space-y-4">
-                          <p className="text-sm text-muted-foreground">
-                            No skills found for this project.
-                          </p>
-                          <Dialog
-                            open={isCreateSkillOpen}
-                            onOpenChange={(nextOpen) => {
-                              if (!isCreatingSkill) {
-                                setIsCreateSkillOpen(nextOpen);
-                                if (!nextOpen) {
-                                  setCreateSkillError(null);
-                                }
-                              }
-                            }}
-                          >
-                            <DialogTrigger asChild>
-                              <Button size="sm" className="gap-1">
-                                <Plus className="h-3.5 w-3.5" />
-                                Create Skill
-                              </Button>
-                            </DialogTrigger>
-                            <DialogContent>
-                              <DialogHeader>
-                                <DialogTitle>Create Skill</DialogTitle>
-                                <DialogDescription>
-                                  Add a new skill to this project.
-                                </DialogDescription>
-                              </DialogHeader>
-                              <div className="space-y-4">
-                                <div className="space-y-2">
-                                  <Label htmlFor="new-skill-name-empty">
-                                    Skill Name
-                                  </Label>
-                                  <Input
-                                    id="new-skill-name-empty"
-                                    placeholder="my-skill.md"
-                                    value={newSkillName}
-                                    onChange={(event) => {
-                                      setNewSkillName(event.target.value);
-                                      setCreateSkillError(null);
-                                    }}
-                                    autoFocus
-                                  />
-                                </div>
-                                <div className="space-y-2">
-                                  <Label htmlFor="new-skill-content-empty">
-                                    Content
-                                  </Label>
-                                  <Textarea
-                                    id="new-skill-content-empty"
-                                    rows={8}
-                                    placeholder="Skill content..."
-                                    value={newSkillContent}
-                                    onChange={(event) => {
-                                      setNewSkillContent(event.target.value);
-                                      setCreateSkillError(null);
-                                    }}
-                                    className="font-mono text-xs"
-                                  />
-                                </div>
-                                {createSkillError ? (
-                                  <p className="text-sm text-destructive">
-                                    {createSkillError}
-                                  </p>
-                                ) : null}
-                              </div>
-                              <DialogFooter>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  onClick={() => setIsCreateSkillOpen(false)}
-                                  disabled={isCreatingSkill}
-                                >
-                                  Cancel
-                                </Button>
-                                <Button
-                                  type="button"
-                                  onClick={handleCreateSkill}
-                                  disabled={
-                                    !newSkillName.trim() ||
-                                    !newSkillContent.trim() ||
-                                    isCreatingSkill
-                                  }
-                                >
-                                  {isCreatingSkill ? "Creating..." : "Create"}
-                                </Button>
-                              </DialogFooter>
-                            </DialogContent>
-                          </Dialog>
-                        </div>
-                      ) : (
-                        <div className="flex h-full min-h-0 flex-col space-y-3">
-                          <div className="flex items-center gap-2">
-                            <div className="overflow-x-auto flex-1">
-                              <div className="inline-flex min-w-full gap-2 rounded-lg border border-border/60 bg-muted/30 p-1">
-                                {skillTabs.map((tab) => {
-                                  const isActive =
-                                    tab.id === activeSkillTab?.id;
-                                  return (
-                                    <button
-                                      key={tab.id}
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveSkillTabId(tab.id);
-                                        setEditingSkillTabId(null);
-                                        setSkillSaveError(null);
-                                      }}
-                                      className={cn(
-                                        "rounded-md px-3 py-1.5 text-xs font-medium whitespace-nowrap transition",
-                                        isActive
-                                          ? "bg-white text-foreground shadow-sm"
-                                          : "text-muted-foreground hover:bg-white/70 hover:text-foreground",
-                                      )}
-                                    >
-                                      {tab.label}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                            <Dialog
-                              open={isCreateSkillOpen}
-                              onOpenChange={(nextOpen) => {
-                                if (!isCreatingSkill) {
-                                  setIsCreateSkillOpen(nextOpen);
-                                  if (!nextOpen) {
-                                    setCreateSkillError(null);
-                                  }
+                          <div className="space-y-2">
+                            <Label htmlFor="permission-mode">
+                              Permission Mode
+                            </Label>
+                            <Select
+                              value={permissionMode}
+                              onValueChange={(value) => {
+                                if (isPermissionMode(value)) {
+                                  dispatch(setPermissionMode(value));
                                 }
                               }}
                             >
-                              <DialogTrigger asChild>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="gap-1 shrink-0"
-                                >
-                                  <Plus className="h-3.5 w-3.5" />
-                                  New Skill
-                                </Button>
-                              </DialogTrigger>
-                              <DialogContent>
-                                <DialogHeader>
-                                  <DialogTitle>Create Skill</DialogTitle>
-                                  <DialogDescription>
-                                    Add a new skill to this project.
-                                  </DialogDescription>
-                                </DialogHeader>
-                                <div className="space-y-4">
-                                  <div className="space-y-2">
-                                    <Label htmlFor="new-skill-name">
-                                      Skill Name
-                                    </Label>
-                                    <Input
-                                      id="new-skill-name"
-                                      placeholder="my-skill.md"
-                                      value={newSkillName}
-                                      onChange={(event) => {
-                                        setNewSkillName(event.target.value);
-                                        setCreateSkillError(null);
-                                      }}
-                                      autoFocus
-                                    />
-                                  </div>
-                                  <div className="space-y-2">
-                                    <Label htmlFor="new-skill-content">
-                                      Content
-                                    </Label>
-                                    <Textarea
-                                      id="new-skill-content"
-                                      rows={8}
-                                      placeholder="Skill content..."
-                                      value={newSkillContent}
-                                      onChange={(event) => {
-                                        setNewSkillContent(event.target.value);
-                                        setCreateSkillError(null);
-                                      }}
-                                      className="font-mono text-xs"
-                                    />
-                                  </div>
-                                  {createSkillError ? (
-                                    <p className="text-sm text-destructive">
-                                      {createSkillError}
-                                    </p>
-                                  ) : null}
-                                </div>
-                                <DialogFooter>
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    onClick={() => setIsCreateSkillOpen(false)}
-                                    disabled={isCreatingSkill}
+                              <SelectTrigger id="permission-mode">
+                                <SelectValue placeholder="Select permission mode" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {PERMISSION_MODE_OPTIONS.map((option) => (
+                                  <SelectItem
+                                    key={option.value}
+                                    value={option.value}
                                   >
-                                    Cancel
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    onClick={handleCreateSkill}
-                                    disabled={
-                                      !newSkillName.trim() ||
-                                      !newSkillContent.trim() ||
-                                      isCreatingSkill
-                                    }
-                                  >
-                                    {isCreatingSkill ? "Creating..." : "Create"}
-                                  </Button>
-                                </DialogFooter>
-                              </DialogContent>
-                            </Dialog>
+                                    {option.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </div>
-                          <section className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-3">
-                            {activeSkillTab ? (
-                              <div className="flex h-full min-h-0 flex-col gap-3">
-                                <div className="flex items-center justify-between gap-2">
-                                  {isActiveSkillEditing ? (
-                                    <>
-                                      <p className="text-xs text-muted-foreground">
-                                        Edit and save this skill tab.
-                                      </p>
-                                      <div className="flex items-center gap-2">
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          variant="outline"
-                                          onClick={handleCancelSkillEdit}
-                                          disabled={isSavingSkill}
-                                        >
-                                          Cancel
-                                        </Button>
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          onClick={handleSaveSkill}
-                                          disabled={
-                                            !isActiveSkillDirty || isSavingSkill
-                                          }
-                                        >
-                                          {isSavingSkill ? "Saving..." : "Save"}
-                                        </Button>
-                                      </div>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <p className="text-xs text-muted-foreground">
-                                        View this skill tab.
-                                      </p>
-                                      <div className="flex items-center gap-2">
-                                        {activeSkillTab.id !== "claude-md" ? (
-                                          <Button
-                                            type="button"
-                                            size="sm"
-                                            variant="destructive"
-                                            onClick={handleDeleteSkill}
-                                            disabled={isDeletingSkill}
-                                            className="gap-1"
-                                          >
-                                            <Trash2 className="h-3.5 w-3.5" />
-                                            {isDeletingSkill
-                                              ? "Deleting..."
-                                              : "Delete"}
-                                          </Button>
-                                        ) : null}
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          onClick={handleStartSkillEdit}
-                                        >
-                                          Edit
-                                        </Button>
-                                      </div>
-                                    </>
-                                  )}
-                                </div>
-                                {isActiveSkillEditing ? (
-                                  <>
-                                    <Textarea
-                                      value={activeSkillContent}
-                                      onChange={(event) => {
-                                        setEditedSkillContentByTabId(
-                                          (previous) => ({
-                                            ...previous,
-                                            [activeSkillTab.id]:
-                                              event.target.value,
-                                          }),
-                                        );
-                                        setSkillSaveError(null);
-                                      }}
-                                      className="min-h-[14rem] flex-1 resize-none font-mono text-xs"
+                          <div className="space-y-2">
+                            <Label htmlFor="workspace-id">Workspace ID</Label>
+                            <Input
+                              id="workspace-id"
+                              value={workspaceId}
+                              placeholder="e.g. 228b439d-3d68-4d22-aaa0-10252c39045d"
+                              onChange={(event) =>
+                                dispatch(
+                                  setWorkspaceId(event.target.value.trim()),
+                                )
+                              }
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Optional. When set, drives the agent's server-side
+                              config (subdir, hooks, MCPs, system prompt) from
+                              WORKSPACE.CONFIG_JSON. Leave blank for legacy
+                              behavior.
+                            </p>
+                          </div>
+                        </div>
+                        <DialogFooter>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => setIsConfigurationOpen(false)}
+                          >
+                            Close
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+
+                    <Dialog
+                      open={isMcpOpen}
+                      onOpenChange={(open) => {
+                        setIsMcpOpen(open);
+                        if (!open) {
+                          dispatch(resetMcpPickerState());
+                        }
+                      }}
+                    >
+                      <DialogTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="w-full justify-start gap-2"
+                        >
+                          <Search className="h-4 w-4" />
+                          MCPs
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>MCPs</DialogTitle>
+                          <DialogDescription>
+                            Search and select the MCPs available to this
+                            workspace.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-3">
+                          <Input
+                            placeholder="Search MCPs..."
+                            value={mcpSearch}
+                            onChange={(event) =>
+                              dispatch(setMcpSearch(event.target.value))
+                            }
+                            className="h-8 text-sm"
+                            autoFocus
+                          />
+                          {orderedMcps.length === 0 && !isLoadingMcps ? (
+                            <p className="text-xs text-muted-foreground">
+                              {mcpSearch
+                                ? "No MCPs match your search."
+                                : "No MCPs available for this workspace yet."}
+                            </p>
+                          ) : (
+                            <div
+                              className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-2"
+                              onScroll={handleMcpListScroll}
+                            >
+                              {orderedMcps.map((mcp) => {
+                                const isSelected = selectedMcpIds.has(mcp.id);
+                                return (
+                                  <label
+                                    key={mcp.id}
+                                    className={cn(
+                                      "flex items-center gap-2 rounded-md px-2 py-1 text-sm transition hover:bg-accent/40",
+                                      isSelected && "bg-accent/60",
+                                    )}
+                                  >
+                                    <Checkbox
+                                      checked={isSelected}
+                                      onCheckedChange={(checked) =>
+                                        handleToggleMcp(mcp, checked === true)
+                                      }
                                     />
-                                    {skillSaveError ? (
-                                      <p className="text-sm text-destructive">
-                                        {skillSaveError}
-                                      </p>
-                                    ) : null}
-                                    <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border/50 bg-white/80 dark:bg-zinc-800/60 p-3">
-                                      <p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                                        Preview
-                                      </p>
-                                      <MarkdownRenderer
-                                        content={activeSkillContent}
-                                        className="text-sm text-foreground"
+                                    <div className="min-w-0">
+                                      <span className="block truncate">
+                                        {mcp.name}
+                                      </span>
+                                      <span className="block text-[11px] uppercase tracking-wide text-muted-foreground">
+                                        {mcp.type}
+                                      </span>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                              {isLoadingMcps ? (
+                                <div className="px-2 py-1 text-xs text-muted-foreground">
+                                  Loading MCPs...
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                        <DialogFooter>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => setIsMcpOpen(false)}
+                          >
+                            Close
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+
+                    <Dialog open={isSkillsOpen} onOpenChange={setIsSkillsOpen}>
+                      <DialogTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="w-full justify-start gap-2"
+                          disabled={!projectId}
+                        >
+                          <BookOpen className="h-4 w-4" />
+                          View Skills
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="flex h-[78vh] w-[92vw] max-w-5xl flex-col">
+                        <DialogHeader>
+                          <DialogTitle>Project Skills</DialogTitle>
+                          <DialogDescription></DialogDescription>
+                        </DialogHeader>
+                        <div className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-1">
+                          {isLoadingSkills ? (
+                            <p className="text-sm text-muted-foreground">
+                              Loading skills...
+                            </p>
+                          ) : skillsError ? (
+                            <p className="text-sm text-destructive">
+                              {skillsError}
+                            </p>
+                          ) : !hasSkillsContent ? (
+                            <div className="space-y-4">
+                              <p className="text-sm text-muted-foreground">
+                                No skills found for this project.
+                              </p>
+                              <Dialog
+                                open={isCreateSkillOpen}
+                                onOpenChange={(nextOpen) => {
+                                  if (!isCreatingSkill) {
+                                    setIsCreateSkillOpen(nextOpen);
+                                    if (!nextOpen) {
+                                      setCreateSkillError(null);
+                                    }
+                                  }
+                                }}
+                              >
+                                <DialogTrigger asChild>
+                                  <Button size="sm" className="gap-1">
+                                    <Plus className="h-3.5 w-3.5" />
+                                    Create Skill
+                                  </Button>
+                                </DialogTrigger>
+                                <DialogContent>
+                                  <DialogHeader>
+                                    <DialogTitle>Create Skill</DialogTitle>
+                                    <DialogDescription>
+                                      Add a new skill to this project.
+                                    </DialogDescription>
+                                  </DialogHeader>
+                                  <div className="space-y-4">
+                                    <div className="space-y-2">
+                                      <Label htmlFor="new-skill-name-empty">
+                                        Skill Name
+                                      </Label>
+                                      <Input
+                                        id="new-skill-name-empty"
+                                        placeholder="my-skill.md"
+                                        value={newSkillName}
+                                        onChange={(event) => {
+                                          setNewSkillName(event.target.value);
+                                          setCreateSkillError(null);
+                                        }}
+                                        autoFocus
                                       />
                                     </div>
-                                  </>
-                                ) : (
-                                  <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border/50 bg-white/80 dark:bg-zinc-800/60 p-3">
-                                    <p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                                      Content
-                                    </p>
-                                    <MarkdownRenderer
-                                      content={activeSkillTab.content}
-                                      className="text-sm text-foreground"
-                                    />
+                                    <div className="space-y-2">
+                                      <Label htmlFor="new-skill-content-empty">
+                                        Content
+                                      </Label>
+                                      <Textarea
+                                        id="new-skill-content-empty"
+                                        rows={8}
+                                        placeholder="Skill content..."
+                                        value={newSkillContent}
+                                        onChange={(event) => {
+                                          setNewSkillContent(
+                                            event.target.value,
+                                          );
+                                          setCreateSkillError(null);
+                                        }}
+                                        className="font-mono text-xs"
+                                      />
+                                    </div>
+                                    {createSkillError ? (
+                                      <p className="text-sm text-destructive">
+                                        {createSkillError}
+                                      </p>
+                                    ) : null}
                                   </div>
-                                )}
+                                  <DialogFooter>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      onClick={() =>
+                                        setIsCreateSkillOpen(false)
+                                      }
+                                      disabled={isCreatingSkill}
+                                    >
+                                      Cancel
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      onClick={handleCreateSkill}
+                                      disabled={
+                                        !newSkillName.trim() ||
+                                        !newSkillContent.trim() ||
+                                        isCreatingSkill
+                                      }
+                                    >
+                                      {isCreatingSkill
+                                        ? "Creating..."
+                                        : "Create"}
+                                    </Button>
+                                  </DialogFooter>
+                                </DialogContent>
+                              </Dialog>
+                            </div>
+                          ) : (
+                            <div className="flex h-full min-h-0 flex-col space-y-3">
+                              <div className="flex items-center gap-2">
+                                <div className="overflow-x-auto flex-1">
+                                  <div className="inline-flex min-w-full gap-2 rounded-lg border border-border/60 bg-muted/30 p-1">
+                                    {skillTabs.map((tab) => {
+                                      const isActive =
+                                        tab.id === activeSkillTab?.id;
+                                      return (
+                                        <button
+                                          key={tab.id}
+                                          type="button"
+                                          onClick={() => {
+                                            setActiveSkillTabId(tab.id);
+                                            setEditingSkillTabId(null);
+                                            setSkillSaveError(null);
+                                          }}
+                                          className={cn(
+                                            "rounded-md px-3 py-1.5 text-xs font-medium whitespace-nowrap transition",
+                                            isActive
+                                              ? "bg-white text-foreground shadow-sm"
+                                              : "text-muted-foreground hover:bg-white/70 hover:text-foreground",
+                                          )}
+                                        >
+                                          {tab.label}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                                <Dialog
+                                  open={isCreateSkillOpen}
+                                  onOpenChange={(nextOpen) => {
+                                    if (!isCreatingSkill) {
+                                      setIsCreateSkillOpen(nextOpen);
+                                      if (!nextOpen) {
+                                        setCreateSkillError(null);
+                                      }
+                                    }
+                                  }}
+                                >
+                                  <DialogTrigger asChild>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="gap-1 shrink-0"
+                                    >
+                                      <Plus className="h-3.5 w-3.5" />
+                                      New Skill
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent>
+                                    <DialogHeader>
+                                      <DialogTitle>Create Skill</DialogTitle>
+                                      <DialogDescription>
+                                        Add a new skill to this project.
+                                      </DialogDescription>
+                                    </DialogHeader>
+                                    <div className="space-y-4">
+                                      <div className="space-y-2">
+                                        <Label htmlFor="new-skill-name">
+                                          Skill Name
+                                        </Label>
+                                        <Input
+                                          id="new-skill-name"
+                                          placeholder="my-skill.md"
+                                          value={newSkillName}
+                                          onChange={(event) => {
+                                            setNewSkillName(event.target.value);
+                                            setCreateSkillError(null);
+                                          }}
+                                          autoFocus
+                                        />
+                                      </div>
+                                      <div className="space-y-2">
+                                        <Label htmlFor="new-skill-content">
+                                          Content
+                                        </Label>
+                                        <Textarea
+                                          id="new-skill-content"
+                                          rows={8}
+                                          placeholder="Skill content..."
+                                          value={newSkillContent}
+                                          onChange={(event) => {
+                                            setNewSkillContent(
+                                              event.target.value,
+                                            );
+                                            setCreateSkillError(null);
+                                          }}
+                                          className="font-mono text-xs"
+                                        />
+                                      </div>
+                                      {createSkillError ? (
+                                        <p className="text-sm text-destructive">
+                                          {createSkillError}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                    <DialogFooter>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() =>
+                                          setIsCreateSkillOpen(false)
+                                        }
+                                        disabled={isCreatingSkill}
+                                      >
+                                        Cancel
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        onClick={handleCreateSkill}
+                                        disabled={
+                                          !newSkillName.trim() ||
+                                          !newSkillContent.trim() ||
+                                          isCreatingSkill
+                                        }
+                                      >
+                                        {isCreatingSkill
+                                          ? "Creating..."
+                                          : "Create"}
+                                      </Button>
+                                    </DialogFooter>
+                                  </DialogContent>
+                                </Dialog>
                               </div>
-                            ) : (
-                              <p className="text-sm text-muted-foreground">
-                                No skill selected.
-                              </p>
-                            )}
-                          </section>
+                              <section className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-3">
+                                {activeSkillTab ? (
+                                  <div className="flex h-full min-h-0 flex-col gap-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                      {isActiveSkillEditing ? (
+                                        <>
+                                          <p className="text-xs text-muted-foreground">
+                                            Edit and save this skill tab.
+                                          </p>
+                                          <div className="flex items-center gap-2">
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant="outline"
+                                              onClick={handleCancelSkillEdit}
+                                              disabled={isSavingSkill}
+                                            >
+                                              Cancel
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              onClick={handleSaveSkill}
+                                              disabled={
+                                                !isActiveSkillDirty ||
+                                                isSavingSkill
+                                              }
+                                            >
+                                              {isSavingSkill
+                                                ? "Saving..."
+                                                : "Save"}
+                                            </Button>
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <p className="text-xs text-muted-foreground">
+                                            View this skill tab.
+                                          </p>
+                                          <div className="flex items-center gap-2">
+                                            {activeSkillTab.id !==
+                                            "claude-md" ? (
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="destructive"
+                                                onClick={handleDeleteSkill}
+                                                disabled={isDeletingSkill}
+                                                className="gap-1"
+                                              >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                                {isDeletingSkill
+                                                  ? "Deleting..."
+                                                  : "Delete"}
+                                              </Button>
+                                            ) : null}
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              onClick={handleStartSkillEdit}
+                                            >
+                                              Edit
+                                            </Button>
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
+                                    {isActiveSkillEditing ? (
+                                      <>
+                                        <Textarea
+                                          value={activeSkillContent}
+                                          onChange={(event) => {
+                                            setEditedSkillContentByTabId(
+                                              (previous) => ({
+                                                ...previous,
+                                                [activeSkillTab.id]:
+                                                  event.target.value,
+                                              }),
+                                            );
+                                            setSkillSaveError(null);
+                                          }}
+                                          className="min-h-[14rem] flex-1 resize-none font-mono text-xs"
+                                        />
+                                        {skillSaveError ? (
+                                          <p className="text-sm text-destructive">
+                                            {skillSaveError}
+                                          </p>
+                                        ) : null}
+                                        <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border/50 bg-white/80 dark:bg-zinc-800/60 p-3">
+                                          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                                            Preview
+                                          </p>
+                                          <MarkdownRenderer
+                                            content={activeSkillContent}
+                                            className="text-sm text-foreground"
+                                          />
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border/50 bg-white/80 dark:bg-zinc-800/60 p-3">
+                                        <p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                                          Content
+                                        </p>
+                                        <MarkdownRenderer
+                                          content={activeSkillTab.content}
+                                          className="text-sm text-foreground"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <p className="text-sm text-muted-foreground">
+                                    No skill selected.
+                                  </p>
+                                )}
+                              </section>
+                            </div>
+                          )}
                         </div>
-                      )}
+                        <DialogFooter>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => setIsSkillsOpen(false)}
+                          >
+                            Close
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
+                  <div className="space-y-3 rounded-xl border border-slate-200/60 bg-white/70 p-4 dark:border-white/10 dark:bg-zinc-900/30">
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold">Technical details</p>
+                      <p className="text-xs text-muted-foreground">
+                        Internal workspace values are available here when you
+                        need them.
+                      </p>
                     </div>
-                    <DialogFooter>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setIsSkillsOpen(false)}
-                      >
-                        Close
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-              </div>
-              <div className="space-y-3 rounded-xl border border-slate-200/60 bg-white/70 p-4 dark:border-white/10 dark:bg-zinc-900/30">
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold">Technical details</p>
-                  <p className="text-xs text-muted-foreground">
-                    Internal workspace values are available here when you need them.
-                  </p>
-                </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-lg border border-slate-200/60 bg-slate-50/70 p-3 dark:border-white/10 dark:bg-zinc-900/40">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Room ID
-                    </p>
-                    <p className="mt-1 break-all font-mono text-xs">
-                      {roomId || "Unavailable"}
-                    </p>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="mt-2 gap-2 px-0"
-                      disabled={!roomId}
-                      onClick={() =>
-                        handleCopyTechnicalDetail("Room ID", roomId)
-                      }
-                    >
-                      <Copy className="h-4 w-4" />
-                      Copy
-                    </Button>
-                  </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-lg border border-slate-200/60 bg-slate-50/70 p-3 dark:border-white/10 dark:bg-zinc-900/40">
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                          Room ID
+                        </p>
+                        <p className="mt-1 break-all font-mono text-xs">
+                          {roomId || "Unavailable"}
+                        </p>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="mt-2 gap-2 px-0"
+                          disabled={!roomId}
+                          onClick={() =>
+                            handleCopyTechnicalDetail("Room ID", roomId)
+                          }
+                        >
+                          <Copy className="h-4 w-4" />
+                          Copy
+                        </Button>
+                      </div>
 
-                  <div className="rounded-lg border border-slate-200/60 bg-slate-50/70 p-3 dark:border-white/10 dark:bg-zinc-900/40">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Project ID
-                    </p>
-                    <p className="mt-1 break-all font-mono text-xs">
-                      {projectId || "Unavailable"}
-                    </p>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="mt-2 gap-2 px-0"
-                      disabled={!projectId}
-                      onClick={() =>
-                        handleCopyTechnicalDetail("Project ID", projectId)
-                      }
-                    >
-                      <Copy className="h-4 w-4" />
-                      Copy
-                    </Button>
+                      <div className="rounded-lg border border-slate-200/60 bg-slate-50/70 p-3 dark:border-white/10 dark:bg-zinc-900/40">
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                          Project ID
+                        </p>
+                        <p className="mt-1 break-all font-mono text-xs">
+                          {projectId || "Unavailable"}
+                        </p>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="mt-2 gap-2 px-0"
+                          disabled={!projectId}
+                          onClick={() =>
+                            handleCopyTechnicalDetail("Project ID", projectId)
+                          }
+                        >
+                          <Copy className="h-4 w-4" />
+                          Copy
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
                 </>
               ) : null}
             </div>
