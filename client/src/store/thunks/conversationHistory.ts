@@ -149,9 +149,31 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined => {
   return undefined;
 };
 
+const maybeParseJsonString = (value: string): unknown => {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+  }
+
+  return value;
+};
+
 const stringifyToolOutput = (value: unknown): string | undefined => {
   if (typeof value === "string") {
-    return value;
+    const parsed = maybeParseJsonString(value);
+    if (typeof parsed === "string") {
+      return parsed;
+    }
+
+    return stringifyToolOutput(parsed);
   }
   if (value == null) {
     return undefined;

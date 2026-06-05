@@ -50,7 +50,7 @@ const mergeTranscriptEvent = (
     existing: TranscriptEvent,
     incoming: TranscriptEvent,
 ): TranscriptEvent => {
-    const timestamp = existing.timestamp || incoming.timestamp;
+    const timestamp = incoming.timestamp || existing.timestamp;
 
     const collapseRepeatedAssistantText = (text: string): string => {
         const trimmed = text.trim();
@@ -131,6 +131,11 @@ const mergeTranscriptEvent = (
             return {
                 ...existing,
                 ...incoming,
+                arguments:
+                    incoming.arguments ??
+                    (existing.kind === "tool-invocation"
+                        ? existing.arguments
+                        : undefined),
                 timestamp,
             };
         case "tool-result":

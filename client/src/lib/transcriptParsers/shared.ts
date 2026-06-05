@@ -264,6 +264,12 @@ export const parseSingleEvent = (
                 eventId: readEventId(msg),
                 toolUseId: readToolUseId(msg),
                 toolName: String(msg.toolName ?? msg.name ?? ""),
+                status:
+                    readString(msg.status) === "streaming"
+                        ? "streaming"
+                        : readString(msg.status) === "complete"
+                          ? "complete"
+                          : undefined,
                 title: readString(msg.title),
                 description: extractToolDescription(
                     msg.description ?? msg.arguments,

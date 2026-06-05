@@ -10,7 +10,6 @@ import type { MCPState } from "../slices/mcpSlice";
 import type { EnginesState } from "../slices/enginesSlice";
 import {
   addTranscriptEvent,
-  setTranscriptEvents,
   type TranscriptState,
 } from "../slices/transcriptSlice";
 import { fetchCommitHistory } from "../slices/gitSlice";
@@ -40,6 +39,29 @@ type GetPixelAsyncResultFn = <O extends unknown[] | []>(
 type GetPixelJobStreamingFn = (jobId: string) => Promise<StreamingResponse>;
 
 type StreamMessage = StreamingResponse["message"][number];
+
+type SemossStreamRenderableType = "content" | "thinking" | "tool";
+
+type SemossStreamState = {
+  userPromptId: string;
+  toolIndexToId: Record<number, string>;
+  toolArgumentBuffers: Record<string, string>;
+  toolIndexToName: Record<number, string>;
+  assistantBlockCounter: number;
+  thinkingBlockCounter: number;
+  currentAssistantBlockId?: string;
+  currentThinkingBlockId?: string;
+  lastRenderableType?: SemossStreamRenderableType;
+};
+
+const LARGE_LIVE_TOOL_VALUE_KEYS = new Set([
+  "content",
+  "new_string",
+  "old_string",
+  "script",
+  "text",
+]);
+const MAX_LIVE_TOOL_STRING_LENGTH = 240;
 
 const sanitizePixelArg = (value: string) => value.replace(/'/g, '"');
 
@@ -111,6 +133,24 @@ export const updateRoomOptions = createAsyncThunk<
 
 const TERMINAL_STATUSES = new Set(["ProgressComplete", "Complete", "Error"]);
 const POLLING_INTERVAL_MS = 300;
+const SEMOSS_HISTORY_SYNC_CLOCK_SKEW_MS = 60_000;
+
+const parseSemossTimestamp = (timestamp: string) => {
+  const parsed = Date.parse(timestamp);
+  if (Number.isFinite(parsed)) {
+    return parsed;
+  }
+
+  if (timestamp.includes(" ")) {
+    const normalized = timestamp.replace(" ", "T");
+    const normalizedParsed = Date.parse(normalized);
+    if (Number.isFinite(normalizedParsed)) {
+      return normalizedParsed;
+    }
+  }
+
+  return null;
+};
 
 const createSemossFallbackTranscriptEvents = (
   roomId: string,
@@ -218,41 +258,282 @@ const ensureSemossFinalAssistantText = ({
   };
 };
 
-const stampSemossStreamMessage = (
-  streamMessage: StreamMessage,
-  jobId: string,
-): StreamMessage => {
-  if (streamMessage.stream_type !== "content" && streamMessage.stream_type !== "thinking") {
-    return streamMessage;
+const summarizeLargeLiveValue = (value: string) => {
+  const lineCount = value.split(/\r\n|\r|\n/).length;
+  return `<${value.length.toLocaleString()} chars${lineCount > 1 ? `, ${lineCount.toLocaleString()} lines` : ""}>`;
+};
+
+const truncateLiveValue = (value: string) => {
+  if (value.length <= MAX_LIVE_TOOL_STRING_LENGTH) {
+    return value;
   }
 
-  const data = streamMessage.data ?? {};
-  const kind =
-    typeof data.kind === "string" ? data.kind : undefined;
-  const hasTextPayload =
-    typeof data.text === "string" ||
-    typeof data.content === "string" ||
-    typeof data.thinking === "string";
+  const headLength = Math.ceil(MAX_LIVE_TOOL_STRING_LENGTH * 0.65);
+  const tailLength = Math.floor(MAX_LIVE_TOOL_STRING_LENGTH * 0.25);
+  return `${value.slice(0, headLength)}...${value.slice(-tailLength)}`;
+};
 
-  if (!kind && !hasTextPayload) {
-    return streamMessage;
+const compactLiveToolValue = (
+  key: string,
+  value: unknown,
+  depth = 0,
+): unknown => {
+  if (typeof value === "string") {
+    if (LARGE_LIVE_TOOL_VALUE_KEYS.has(key) || value.length > 1200) {
+      return summarizeLargeLiveValue(value);
+    }
+
+    return truncateLiveValue(value);
   }
 
-  if (kind === "user-prompt" || kind === "agent-result") {
-    return streamMessage;
+  if (Array.isArray(value)) {
+    if (depth > 1) {
+      return `<${value.length.toLocaleString()} items>`;
+    }
+
+    return value
+      .slice(0, 8)
+      .map((item, index) =>
+        compactLiveToolValue(String(index), item, depth + 1),
+      );
   }
 
-  const stampedData = {
-    ...data,
-    eventId:
-      streamMessage.stream_type === "thinking"
-        ? `semoss-thinking-${jobId}`
-        : `semoss-assistant-${jobId}`,
-  };
+  if (value && typeof value === "object") {
+    if (depth > 1) {
+      return "<object>";
+    }
+
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => [
+        entryKey,
+        compactLiveToolValue(entryKey, entryValue, depth + 1),
+      ]),
+    );
+  }
+
+  return value;
+};
+
+const compactLiveToolRecord = (
+  value: unknown,
+): Record<string, unknown> | undefined => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return compactLiveToolValue("", value) as Record<string, unknown>;
+};
+
+const parseLiveToolArguments = (
+  value: string,
+): Record<string, unknown> | undefined => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return compactLiveToolRecord(parsed);
+    }
+  } catch {
+    // Raw SEMOSS tool argument chunks are JSON fragments. Keep a compact
+    // preview visible until enough chunks arrive to parse the object.
+  }
 
   return {
-    ...streamMessage,
-    data: stampedData,
+    arguments: truncateLiveValue(trimmed.replace(/\s+/g, " ")),
+  };
+};
+
+const compactSemossLiveEvent = (
+  data: Record<string, unknown>,
+): Record<string, unknown> => {
+  if (data.kind !== "tool-invocation" && data.kind !== "tool-result") {
+    return data;
+  }
+
+  const compacted = {
+    ...data,
+    arguments: compactLiveToolRecord(data.arguments),
+    toolParameterValues: compactLiveToolRecord(data.toolParameterValues),
+  };
+  const toolCall =
+    data.toolCall && typeof data.toolCall === "object" && !Array.isArray(data.toolCall)
+      ? (data.toolCall as Record<string, unknown>)
+      : undefined;
+
+  if (!toolCall) {
+    return compacted;
+  }
+
+  return {
+    ...compacted,
+    toolCall: {
+      ...toolCall,
+      arguments: compactLiveToolRecord(toolCall.arguments),
+    },
+  };
+};
+
+const getSemossTextBlockId = (
+  state: SemossStreamState,
+  jobId: string,
+  streamType: "content" | "thinking",
+) => {
+  if (streamType === "thinking") {
+    if (state.lastRenderableType !== "thinking" || !state.currentThinkingBlockId) {
+      state.currentThinkingBlockId = `semoss-thinking-${jobId}-${state.thinkingBlockCounter}`;
+      state.thinkingBlockCounter += 1;
+    }
+    state.lastRenderableType = "thinking";
+    return state.currentThinkingBlockId;
+  }
+
+  if (state.lastRenderableType !== "content" || !state.currentAssistantBlockId) {
+    state.currentAssistantBlockId = `semoss-assistant-${jobId}-${state.assistantBlockCounter}`;
+    state.assistantBlockCounter += 1;
+  }
+  state.lastRenderableType = "content";
+  return state.currentAssistantBlockId;
+};
+
+const normalizeSemossStreamingChunk = ({
+  streamMessage,
+  jobId,
+  streamState,
+}: {
+  streamMessage: StreamMessage;
+  jobId: string;
+  streamState: SemossStreamState;
+}): unknown => {
+  const data = streamMessage.data ?? {};
+
+  if (streamMessage.stream_type === "content" || streamMessage.stream_type === "thinking") {
+    if (typeof data.kind === "string") {
+      if (data.kind === "user-prompt") {
+        return {
+          ...data,
+          promptId: streamState.userPromptId,
+        };
+      }
+
+      if (data.kind === "assistant-text") {
+        const eventId = getSemossTextBlockId(
+          streamState,
+          jobId,
+          streamMessage.stream_type,
+        );
+
+        return {
+          ...data,
+          eventId,
+        };
+      }
+
+      return data;
+    }
+
+    const textValue =
+      typeof data.text === "string"
+        ? data.text
+        : typeof data.content === "string"
+          ? data.content
+          : typeof data.thinking === "string"
+            ? data.thinking
+            : "";
+
+    if (!textValue) {
+      return streamMessage;
+    }
+
+    const eventId = getSemossTextBlockId(
+      streamState,
+      jobId,
+      streamMessage.stream_type,
+    );
+
+    return {
+      ...data,
+      kind: "assistant-text",
+      eventId,
+      text: textValue,
+      display: streamMessage.stream_type === "thinking" ? "intent" : undefined,
+      isPartial:
+        typeof data.finish_reason === "string"
+          ? data.finish_reason !== "completed"
+          : true,
+      timestamp:
+        typeof data.timestamp === "string"
+          ? data.timestamp
+          : new Date().toISOString(),
+    };
+  }
+
+  if (streamMessage.stream_type !== "tool") {
+    return streamMessage;
+  }
+
+  if (typeof data.kind === "string") {
+    streamState.lastRenderableType = "tool";
+    return compactSemossLiveEvent(data);
+  }
+
+  if (typeof data.finish_reason === "string") {
+    streamState.lastRenderableType = "tool";
+    return null;
+  }
+
+  const toolIndex =
+    typeof data.index === "number" ? data.index : undefined;
+
+  if (typeof toolIndex !== "number") {
+    return null;
+  }
+
+  streamState.lastRenderableType = "tool";
+
+  const existingToolUseId = streamState.toolIndexToId[toolIndex];
+  const incomingToolUseId =
+    typeof data.id === "string" && data.id ? data.id : existingToolUseId;
+
+  if (!incomingToolUseId) {
+    return null;
+  }
+
+  streamState.toolIndexToId[toolIndex] = incomingToolUseId;
+
+  const functionPayload =
+    data.function && typeof data.function === "object" && !Array.isArray(data.function)
+      ? (data.function as Record<string, unknown>)
+      : undefined;
+  const nextToolName =
+    typeof functionPayload?.name === "string"
+      ? functionPayload.name
+      : "";
+  if (nextToolName) {
+    streamState.toolIndexToName[toolIndex] = nextToolName;
+  }
+
+  if (typeof functionPayload?.arguments === "string") {
+    streamState.toolArgumentBuffers[incomingToolUseId] =
+      (streamState.toolArgumentBuffers[incomingToolUseId] ?? "") +
+      functionPayload.arguments;
+  }
+
+  const toolArguments = parseLiveToolArguments(
+    streamState.toolArgumentBuffers[incomingToolUseId] ?? "",
+  );
+
+  return {
+    kind: "tool-invocation",
+    toolUseId: incomingToolUseId,
+    eventId: `semoss-tool-invocation-${incomingToolUseId}`,
+    toolName: streamState.toolIndexToName[toolIndex] ?? "",
+    ...(toolArguments ? { arguments: toolArguments } : {}),
+    status: "streaming",
+    timestamp: new Date().toISOString(),
   };
 };
 
@@ -295,6 +576,20 @@ export const runAgentHarness = createAsyncThunk<
       const { chat, mcp, engines } = getState();
       const targetProjectId = projectId ?? chat.projectId;
       const initialTranscriptEventCount = getState().transcript.events.length;
+      const runStartedAtMs = Date.now();
+      const semossUserPromptId = `semoss-user-${chat.roomId}-${runStartedAtMs}`;
+
+      if (chat.harnessType === "semoss") {
+        dispatch(
+          addTranscriptEvent({
+            kind: "user-prompt",
+            promptId: semossUserPromptId,
+            text: message,
+            timestamp: new Date(runStartedAtMs).toISOString(),
+            harnessType: "semoss",
+          }),
+        );
+      }
 
       const selectedMcps: MCPDetails[] = mcp.selectedMcps.map((x) => ({
         id: x.id,
@@ -344,6 +639,14 @@ export const runAgentHarness = createAsyncThunk<
       }
 
       let isPolling = true;
+      const semossStreamState: SemossStreamState = {
+        userPromptId: semossUserPromptId,
+        toolIndexToId: {},
+        toolArgumentBuffers: {},
+        toolIndexToName: {},
+        assistantBlockCounter: 0,
+        thinkingBlockCounter: 0,
+      };
 
       while (isPolling) {
         try {
@@ -353,8 +656,17 @@ export const runAgentHarness = createAsyncThunk<
             for (const streamMsg of response.message) {
               const normalizedStreamMsg =
                 chat.harnessType === "semoss"
-                  ? stampSemossStreamMessage(streamMsg, jobId)
+                  ? normalizeSemossStreamingChunk({
+                      streamMessage: streamMsg,
+                      jobId,
+                      streamState: semossStreamState,
+                    })
                   : streamMsg;
+
+              if (!normalizedStreamMsg) {
+                continue;
+              }
+
               const events = parseTranscriptMessage(
                 normalizedStreamMsg,
                 chat.harnessType,
@@ -417,17 +729,28 @@ export const runAgentHarness = createAsyncThunk<
         if (finalAssistantEvent) {
           dispatch(addTranscriptEvent(finalAssistantEvent));
         }
+      }
 
+      if (chat.harnessType === "semoss") {
         try {
           const persistedMessages = await runPixel<PlaygroundMessage[]>(
             `GetPlaygroundMessages(roomId='${chat.roomId}', sort='ASC');`,
           );
 
           if (Array.isArray(persistedMessages)) {
-            dispatch(setTranscriptEvents(parsePlaygroundMessages(persistedMessages)));
+            for (const event of parsePlaygroundMessages(persistedMessages)) {
+              const eventTime = parseSemossTimestamp(event.timestamp);
+              const isCurrentRunEvent =
+                eventTime == null ||
+                eventTime >= runStartedAtMs - SEMOSS_HISTORY_SYNC_CLOCK_SKEW_MS;
+
+              if (event.kind !== "user-prompt" && isCurrentRunEvent) {
+                dispatch(addTranscriptEvent(event));
+              }
+            }
           }
         } catch (error) {
-          console.warn("Failed to refresh SEMOSS transcript from playground history:", error);
+          console.warn("Failed to sync SEMOSS transcript from playground history:", error);
         }
       }
 

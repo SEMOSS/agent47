@@ -85,23 +85,27 @@ const TOOL_LABELS: Record<string, string> = {
     "nodebuildermcp-buildandpublishapp": "Build and Publish",
 };
 
+const TOOL_ENGINE_PREFIX_RE =
+    /^a?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}_+/i;
+
+const stripToolEnginePrefix = (toolName: string) =>
+    toolName.trim().replace(TOOL_ENGINE_PREFIX_RE, "");
+
 const toTitleCase = (value: string) =>
-    value
-        .replace(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}_/i, "")
+    stripToolEnginePrefix(value)
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
         .replace(/[_-]+/g, " ")
+        .trim()
         .replace(/\b\w/g, (char) => char.toUpperCase());
 
 const getToolDisplayName = (toolName: string) => {
-    const normalized = toolName.trim();
+    const normalized = stripToolEnginePrefix(toolName);
     if (!normalized) {
         return "Tool";
     }
 
     return TOOL_LABELS[normalized.toLowerCase()] ?? toTitleCase(normalized);
 };
-
-const stripToolEnginePrefix = (toolName: string) =>
-    toolName.trim().replace(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}_/i, "");
 
 const getToolLookupKey = (toolName: string) =>
     stripToolEnginePrefix(toolName).replace(/[\s_-]+/g, "").toLowerCase();
@@ -201,6 +205,16 @@ const formatToolArgs = (args?: Record<string, unknown>) => {
     return `${summary}${extraCount > 0 ? `, +${extraCount} more` : ""}`;
 };
 
+const formatToolOutputPreview = (value: string, maxLength = 160) =>
+    truncateMiddle(
+        value
+            .replace(/\\n/g, "\n")
+            .replace(/\\t/g, "\t")
+            .replace(/\s+/g, " ")
+            .trim(),
+        maxLength,
+    );
+
 const buildStatsSummary = (stats: ToolStats): string => {
     const parts: string[] = [];
     if (stats.readCount > 0) parts.push(`${stats.readCount} reads`);
@@ -263,11 +277,11 @@ const ToolInvocationBubble = ({ event }: { event: ToolInvocation }) => {
                 <Icon className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-500 dark:text-blue-400" />
                 <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 flex-col gap-0.5">
-                        <span className="shrink-0 whitespace-nowrap font-medium text-foreground/80">
+                        <span className="font-medium text-foreground/80 break-words">
                             {label}
                         </span>
                         {argsSummary && (
-                            <span className="min-w-0 break-words text-muted-foreground">
+                            <span className="break-words text-muted-foreground">
                                 {argsSummary}
                             </span>
                         )}
@@ -373,7 +387,7 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
                 )}
                 {hasContent && !expanded && (
                     <p className="mt-1.5 text-[11px] text-muted-foreground/70 pl-5.5 line-clamp-2">
-                        {previewContent}
+                        {formatToolOutputPreview(previewContent)}
                     </p>
                 )}
                 {hasContent && expanded && (
@@ -416,9 +430,6 @@ const AssistantMessageBubble = ({ event }: { event: AssistantText }) => (
         </span>
         <div className="max-w-[75%] rounded-2xl px-4 py-3 text-sm bg-gradient-to-br from-white to-slate-100 dark:from-zinc-700/80 dark:to-zinc-900/80 text-foreground border border-slate-200/50 dark:border-white/10 shadow-sm">
             <MarkdownRenderer content={event.text} />
-            {event.isPartial ? (
-                <span className="inline-block ml-1 h-3 w-0.5 animate-pulse bg-foreground/60" />
-            ) : null}
         </div>
     </div>
 );

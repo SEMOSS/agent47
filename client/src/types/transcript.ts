@@ -32,6 +32,7 @@ export type ToolInvocation = {
     toolUseId: string;
     eventId?: string;
     toolName: string;
+    status?: "streaming" | "complete";
     title?: string;
     description?: string;
     arguments?: Record<string, unknown>;
