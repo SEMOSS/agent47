@@ -23,3 +23,9 @@ py/__pycache__/
 .classpath
 .project
 .settings/
+
+# Archives (these previously bloated the repo)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
