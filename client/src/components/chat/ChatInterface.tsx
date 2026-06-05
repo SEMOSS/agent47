@@ -28,6 +28,8 @@ import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
 import { IssuesPanel } from "@/components/chat/IssuesPanel";
 import { EnginesPanel } from "@/components/chat/EnginesPanel";
+import { AgentPicker } from "@/components/chat/AgentPicker";
+import { HooksPanel } from "@/components/chat/HooksPanel";
 import { HistoryPanel } from "@/components/chat/HistoryPanel";
 import { LatestCommitChip } from "@/components/chat/LatestCommitChip";
 import { ConfirmationDialog } from "@/library/ConfirmationDialog";
@@ -1027,7 +1029,7 @@ export const ChatInterface = () => {
                 </TabsTrigger>
                 <TabsTrigger value="engines">Engines</TabsTrigger>
                 <TabsTrigger value="history">History</TabsTrigger>
-                <TabsTrigger value="settings">Settings</TabsTrigger>
+                <TabsTrigger value="settings">Agent</TabsTrigger>
               </TabsList>
             </div>
           </header>
@@ -1130,14 +1132,17 @@ export const ChatInterface = () => {
             <div className="flex flex-col gap-5">
               <div className="space-y-2">
                 <p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
-                  Workspace
+                  Agent
                 </p>
-                <h2 className="text-lg font-semibold">Workspace settings</h2>
+                <h2 className="text-lg font-semibold">Agent settings</h2>
                 <p className="text-sm text-muted-foreground">
-                  Choose your assistant, pick a model, and open advanced tools
-                  when you need them.
+                  Pick an agent, choose its assistant + model, and configure
+                  lifecycle hooks. Switching agents reloads its hook list and
+                  workspace config.
                 </p>
               </div>
+
+              <AgentPicker />
 
               <div className="space-y-2">
                 <Label>Assistant</Label>
@@ -1887,6 +1892,13 @@ export const ChatInterface = () => {
                   </div>
                 </>
               ) : null}
+
+              {/* Hooks section — formerly a top-level tab; now lives as
+                  the bottom section of Agent settings so users see the
+                  workspace's hook list alongside its other config. */}
+              <div className="-mx-4 border-t border-slate-200/50 dark:border-white/10">
+                <HooksPanel />
+              </div>
             </div>
           </TabsContent>
         </Tabs>
