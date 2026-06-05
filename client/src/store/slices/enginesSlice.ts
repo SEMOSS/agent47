@@ -60,7 +60,7 @@ const initialState: EnginesState = {
 const buildMyEnginesPixel = (type: EngineCategory, search: string): string => {
   const trimmed = search.trim();
   if (trimmed) {
-    return `MyEngines(filterWord=["<encode>${trimmed}</encode>"], engineTypes=["${type}"], limit=[${ENGINE_FETCH_LIMIT}], offset=[0]);`;
+    return `MyEngines(filterWord=["${trimmed}"], engineTypes=["${type}"], limit=[${ENGINE_FETCH_LIMIT}], offset=[0]);`;
   }
   return `MyEngines(engineTypes=["${type}"], limit=[${ENGINE_FETCH_LIMIT}], offset=[0]);`;
 };
@@ -118,7 +118,9 @@ export const fetchEnginesByType = createAsyncThunk<
   const items = dedupeById(
     (response ?? [])
       .map((row) => normalizeEngine((row ?? {}) as Record<string, any>, type))
-      .filter((item): item is EngineItem => item !== null && item.type === type),
+      .filter(
+        (item): item is EngineItem => item !== null && item.type === type,
+      ),
   );
   return { type, items, filterWord: search };
 });
@@ -130,45 +132,42 @@ export const fetchEnginesByType = createAsyncThunk<
 export const loadProjectEngineDependencies = createAsyncThunk<
   Record<EngineCategory, EngineItem[]>,
   { projectId: string; runPixel: RunPixelFn }
->(
-  "engines/loadProjectEngineDependencies",
-  async ({ projectId, runPixel }) => {
-    const pixel = `GetProjectDependencies(project=['${projectId}']);`;
-    const response = await runPixel<unknown>(pixel);
+>("engines/loadProjectEngineDependencies", async ({ projectId, runPixel }) => {
+  const pixel = `GetProjectDependencies(project=['${projectId}']);`;
+  const response = await runPixel<unknown>(pixel);
 
-    const buckets: Record<EngineCategory, EngineItem[]> = {
-      MODEL: [],
-      DATABASE: [],
-      STORAGE: [],
-      VECTOR: [],
-    };
+  const buckets: Record<EngineCategory, EngineItem[]> = {
+    MODEL: [],
+    DATABASE: [],
+    STORAGE: [],
+    VECTOR: [],
+  };
 
-    const engines =
-      response &&
-      typeof response === "object" &&
-      Array.isArray((response as { engines?: unknown[] }).engines)
-        ? ((response as { engines: unknown[] }).engines)
-        : [];
+  const engines =
+    response &&
+    typeof response === "object" &&
+    Array.isArray((response as { engines?: unknown[] }).engines)
+      ? (response as { engines: unknown[] }).engines
+      : [];
 
-    for (const raw of engines) {
-      if (!raw || typeof raw !== "object") continue;
-      const item = normalizeEngine(
-        raw as Record<string, any>,
-        "MODEL", // fallback only — GetProjectDependencies rows always carry engine_type
-      );
-      if (!item) continue;
-      if (item.type in buckets) {
-        buckets[item.type].push(item);
-      }
+  for (const raw of engines) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = normalizeEngine(
+      raw as Record<string, any>,
+      "MODEL", // fallback only — GetProjectDependencies rows always carry engine_type
+    );
+    if (!item) continue;
+    if (item.type in buckets) {
+      buckets[item.type].push(item);
     }
+  }
 
-    for (const cat of ENGINE_CATEGORIES) {
-      buckets[cat] = dedupeById(buckets[cat]);
-    }
+  for (const cat of ENGINE_CATEGORIES) {
+    buckets[cat] = dedupeById(buckets[cat]);
+  }
 
-    return buckets;
-  },
-);
+  return buckets;
+});
 
 export const saveSelectedEngines = createAsyncThunk<
   void,

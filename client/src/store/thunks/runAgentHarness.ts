@@ -76,7 +76,10 @@ export const updateRoomOptions = createAsyncThunk<
     model: string;
     runPixel: RunPixelFn;
   },
-  { rejectValue: string; state: { chat: ChatState; mcp: MCPState; engines: EnginesState } }
+  {
+    rejectValue: string;
+    state: { chat: ChatState; mcp: MCPState; engines: EnginesState };
+  }
 >(
   "chat/updateRoomOptions",
   async (
@@ -265,7 +268,15 @@ export const runAgentHarness = createAsyncThunk<
     projectId?: string;
     engineId?: string;
   },
-  { rejectValue: string; state: { chat: ChatState; mcp: MCPState; engines: EnginesState; transcript: TranscriptState } }
+  {
+    rejectValue: string;
+    state: {
+      chat: ChatState;
+      mcp: MCPState;
+      engines: EnginesState;
+      transcript: TranscriptState;
+    };
+  }
 >(
   "chat/runAgentHarness",
   async (
@@ -311,8 +322,7 @@ export const runAgentHarness = createAsyncThunk<
       // SEMOSS harness drives its own tool loop and benefits from an explicit
       // maxTurns cap. CLI harnesses (claude_code, github_copilot_py) manage their
       // own loops and ignore the cap.
-      const maxTurnsPart =
-        chat.harnessType === "semoss" ? ", maxTurns=30" : "";
+      const maxTurnsPart = chat.harnessType === "semoss" ? ", maxTurns=30" : "";
 
       // When a workspace id is configured, pass it as a named arg on RunAgent
       // so the backend AgentRunner overlays it onto the room for the duration
@@ -325,7 +335,7 @@ export const runAgentHarness = createAsyncThunk<
         ? `, workspaceId='${sanitizePixelArg(trimmedWorkspaceId)}'`
         : "";
 
-      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='<encode>${safeMessage}</encode>', harnessType="${chat.harnessType}"${maxTurnsPart}, maxReflections=0, paramValues=[${JSON.stringify(paramMap)}]${workspaceIdPart}) ;`;
+      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='${safeMessage}', harnessType="${chat.harnessType}"${maxTurnsPart}, maxReflections=0, paramValues=[${JSON.stringify(paramMap)}]${workspaceIdPart}) ;`;
 
       const { jobId } = await runPixelAsync(pixelString);
 
@@ -424,7 +434,7 @@ export const runAgentHarness = createAsyncThunk<
       if (shouldGenerateRoomName) {
         try {
           const generatedRoomName = await runPixel<string>(
-            `GenerateRoomName(roomId='${chat.roomId}', prompt='<encode>${safeMessage}</encode>', engine='${chat.engineId}');`,
+            `GenerateRoomName(roomId='${chat.roomId}', prompt='${safeMessage}', engine='${chat.engineId}');`,
           );
           if (generatedRoomName?.trim()) {
             dispatch(

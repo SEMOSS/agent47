@@ -174,7 +174,7 @@ const formatProjectDate = (value?: string) => {
 
 const buildProjectBrowsePixel = (filterWord: string, offset: number) => {
   const trimmed = filterWord.trim();
-  const encodedFilter = trimmed ? `<encode>${trimmed}</encode>` : "";
+  const encodedFilter = trimmed ? `${trimmed}` : "";
 
   return `MyProjects ( metaKeys = [ "tag" , "domain" , "data classification" , "data restrictions" , "description" ] , metaFilters = [ { 'tag': 'CLAUDE'} ] , filterWord = [ "${encodedFilter}" ] , onlyPortals = [ true ] , limit = [ ${PROJECTS_PAGE_SIZE} ] , offset = [ ${offset} ] ) ;`;
 };
@@ -196,13 +196,17 @@ export const HomePage = () => {
   const iframeRefreshKey = useAppSelector(
     (state) => state.chat.iframeRefreshKey,
   );
-  const previewSessionId = useAppSelector((state) => state.issues.previewSessionId);
+  const previewSessionId = useAppSelector(
+    (state) => state.issues.previewSessionId,
+  );
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [isLoadProjectOpen, setIsLoadProjectOpen] = useState(false);
   const [projectSearchQuery, setProjectSearchQuery] = useState("");
-  const [projectSearchResults, setProjectSearchResults] = useState<ProjectSummary[]>([]);
+  const [projectSearchResults, setProjectSearchResults] = useState<
+    ProjectSummary[]
+  >([]);
   const [projectSearchOffset, setProjectSearchOffset] = useState(0);
   const [projectSearchHasMore, setProjectSearchHasMore] = useState(true);
   const [isProjectSearchLoading, setIsProjectSearchLoading] = useState(false);
@@ -300,7 +304,11 @@ export const HomePage = () => {
     const lastRoomId = readLastRoomId(firstProjectId);
     if (lastRoomId) {
       void dispatch(
-        resumeConversation({ roomId: lastRoomId, projectId: firstProjectId, runPixel }),
+        resumeConversation({
+          roomId: lastRoomId,
+          projectId: firstProjectId,
+          runPixel,
+        }),
       );
     }
   }, [dispatch, myProjects, projectId, projectsLoaded, runPixel]);
@@ -418,7 +426,11 @@ export const HomePage = () => {
       const lastRoomId = readLastRoomId(nextProjectId);
       if (lastRoomId) {
         void dispatch(
-          resumeConversation({ roomId: lastRoomId, projectId: nextProjectId, runPixel }),
+          resumeConversation({
+            roomId: lastRoomId,
+            projectId: nextProjectId,
+            runPixel,
+          }),
         );
       }
       setIsLoadProjectOpen(false);
@@ -426,19 +438,22 @@ export const HomePage = () => {
     [dispatch, runPixel],
   );
 
-  const handleCopyTechnicalDetail = useCallback(async (label: string, value: string) => {
-    if (!value) {
-      return;
-    }
+  const handleCopyTechnicalDetail = useCallback(
+    async (label: string, value: string) => {
+      if (!value) {
+        return;
+      }
 
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.success(`${label} copied`);
-    } catch (error) {
-      console.error(`Failed to copy ${label}:`, error);
-      toast.error(`Failed to copy ${label.toLowerCase()}.`);
-    }
-  }, []);
+      try {
+        await navigator.clipboard.writeText(value);
+        toast.success(`${label} copied`);
+      } catch (error) {
+        console.error(`Failed to copy ${label}:`, error);
+        toast.error(`Failed to copy ${label.toLowerCase()}.`);
+      }
+    },
+    [],
+  );
 
   const showCreateProjectMessage =
     projectsLoaded && !projectId && myProjects.length === 0;
@@ -452,7 +467,15 @@ export const HomePage = () => {
       : "Loading your projects...";
 
   const loadProjectsPage = useCallback(
-    async ({ query, offset, append }: { query: string; offset: number; append: boolean }) => {
+    async ({
+      query,
+      offset,
+      append,
+    }: {
+      query: string;
+      offset: number;
+      append: boolean;
+    }) => {
       const requestId = projectSearchRequestIdRef.current + 1;
       projectSearchRequestIdRef.current = requestId;
       setIsProjectSearchLoading(true);
@@ -506,7 +529,8 @@ export const HomePage = () => {
       return;
     }
 
-    const remaining = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const remaining =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
     if (remaining > 80) {
       return;
     }
@@ -634,7 +658,9 @@ export const HomePage = () => {
                       <button
                         type="button"
                         className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
-                        onClick={() => handleCopyTechnicalDetail("Room ID", roomId)}
+                        onClick={() =>
+                          handleCopyTechnicalDetail("Room ID", roomId)
+                        }
                       >
                         <Copy className="h-3.5 w-3.5" />
                         Copy
@@ -751,8 +777,7 @@ export const HomePage = () => {
           <div
             className={cn(
               "flex h-full w-full items-center justify-center overflow-auto",
-              viewportMode !== "desktop" &&
-                "bg-slate-100 dark:bg-zinc-950",
+              viewportMode !== "desktop" && "bg-slate-100 dark:bg-zinc-950",
             )}
           >
             <iframe
@@ -763,9 +788,7 @@ export const HomePage = () => {
               onLoad={handlePreviewLoad}
               className={cn(
                 "border-0 bg-white",
-                viewportMode === "desktop"
-                  ? "h-full w-full"
-                  : "shadow-lg",
+                viewportMode === "desktop" ? "h-full w-full" : "shadow-lg",
               )}
               style={
                 viewportMode === "desktop"
@@ -784,7 +807,8 @@ export const HomePage = () => {
             <p className="text-sm text-muted-foreground">{emptyStateMessage}</p>
             {showCreateProjectMessage ? (
               <p className="text-xs text-muted-foreground">
-                Use New project to create your first workspace, or Open project to switch to an existing one.
+                Use New project to create your first workspace, or Open project
+                to switch to an existing one.
               </p>
             ) : null}
             {showLoadingMessage ? (
@@ -980,7 +1004,9 @@ export const HomePage = () => {
             </div>
             {isProjectSearchLoading && projectSearchResults.length === 0 ? (
               <div className="rounded-lg border border-dashed border-border/60 px-4 py-8 text-center">
-                <p className="text-sm text-muted-foreground">Loading projects...</p>
+                <p className="text-sm text-muted-foreground">
+                  Loading projects...
+                </p>
               </div>
             ) : myProjects.length === 0 ? (
               <p className="text-sm text-muted-foreground">

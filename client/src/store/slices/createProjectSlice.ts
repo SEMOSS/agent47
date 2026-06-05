@@ -144,7 +144,7 @@ export const createProject = createAsyncThunk<
       if (!projectId) {
         throw new Error("Project ID not found in response");
       }
-      const saveAssetPixel = `SaveAsset ( fileName = [ "version/assets/portals/index.html" ] , content = [ "<encode><html><style>html {font-family: sans-serif; padding: 30px;}</style><h1>${projectName}</h1><p>This is placeholder text for your new Application.</p><p>You can add new files and edit this text using the Code Editor.</p></html></encode>" ] , space = [ '${projectId}' ] ) ;`;
+      const saveAssetPixel = `SaveAsset ( fileName = [ "version/assets/portals/index.html" ] , content = [ "<html><style>html {font-family: sans-serif; padding: 30px;}</style><h1>${projectName}</h1><p>This is placeholder text for your new Application.</p><p>You can add new files and edit this text using the Code Editor.</p></html>" ] , space = [ '${projectId}' ] ) ;`;
       await runPixel(saveAssetPixel);
       const commitAssetPixel = `CommitAsset ( filePath = [ "version/assets/portals/index.html" ] , comment = [ "Hardcoded comment from the App Page editor" ] , space = [ '${projectId}' ] ) ;`;
       await runPixel(commitAssetPixel);
