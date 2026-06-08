@@ -74,7 +74,6 @@ import {
   setHarnessType,
   setInputMessage,
   setPermissionMode,
-  setSystemPrompt,
   setWorkspaceId,
   startNewRoom,
 } from "@/store/slices/chatSlice";
@@ -204,7 +203,6 @@ export const ChatInterface = () => {
     engineDisplayName,
     projectId,
     workspaceId,
-    systemPrompt,
     permissionMode,
     harnessType,
     inputMessage,
@@ -1268,18 +1266,6 @@ export const ChatInterface = () => {
 
               {isAdvancedOpen ? (
                 <>
-                  <div className="space-y-2">
-                    <Label htmlFor="system-prompt">System Prompt</Label>
-                    <Textarea
-                      id="system-prompt"
-                      rows={4}
-                      value={systemPrompt}
-                      onChange={(event) =>
-                        dispatch(setSystemPrompt(event.target.value))
-                      }
-                    />
-                  </div>
-
                   <div className="space-y-2">
                     <Dialog
                       open={isConfigurationOpen}

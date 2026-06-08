@@ -2,7 +2,6 @@ import { createAsyncThunk } from "@reduxjs/toolkit";
 import { parseTranscriptMessage } from "@/lib/parseTranscriptMessage";
 import type { StreamingResponse } from "@/contexts/AppContext";
 import {
-  selectEffectiveSystemPrompt,
   type ChatState,
   updateConversationRoomName,
 } from "../slices/chatSlice";
@@ -74,27 +73,24 @@ interface MCPDetails {
 
 const createUpdateRoomOptionsPixel = (
   roomId: string,
-  instructions: string,
   mcps: MCPDetails[],
   model: string,
   harnessType: ChatState["harnessType"],
   targetProjectId?: string,
 ) => {
-  const safeInstructions = sanitizePixelArg(instructions);
   const mcpStrings = mcps.map(
     (mcp) => `{'id':'${mcp.id}','name':'${mcp.name}','type':'${mcp.type}'}`,
   );
   const targetProjectPart = targetProjectId
     ? `, "targetProjectId":'${sanitizePixelArg(targetProjectId)}'`
     : "";
-  return `UpdateRoomOptions(roomId='${roomId}', roomOptions=[{"instructions":'${safeInstructions}', "modelId":'${model}', "harnessType":'${harnessType}', "mcp":[${mcpStrings.join(",")}]${targetProjectPart} }] )`;
+  return `UpdateRoomOptions(roomId='${roomId}', roomOptions=[{"modelId":'${model}', "harnessType":'${harnessType}', "mcp":[${mcpStrings.join(",")}]${targetProjectPart} }] )`;
 };
 
 export const updateRoomOptions = createAsyncThunk<
   { response: boolean },
   {
     roomId: string;
-    instructions: string;
     mcps: MCPDetails[];
     model: string;
     runPixel: RunPixelFn;
@@ -106,7 +102,7 @@ export const updateRoomOptions = createAsyncThunk<
 >(
   "chat/updateRoomOptions",
   async (
-    { roomId, instructions, mcps, model, runPixel },
+    { roomId, mcps, model, runPixel },
     { rejectWithValue, getState },
   ) => {
     try {
@@ -115,7 +111,6 @@ export const updateRoomOptions = createAsyncThunk<
       } = getState();
       const pixelString = createUpdateRoomOptionsPixel(
         roomId,
-        instructions,
         mcps,
         model,
         harnessType,
@@ -562,7 +557,7 @@ export const runAgentHarness = createAsyncThunk<
     { rejectWithValue, getState, dispatch },
   ) => {
     try {
-      const { chat, mcp, engines } = getState();
+      const { chat, mcp } = getState();
       const targetProjectId = projectId ?? chat.projectId;
       const initialTranscriptEventCount = getState().transcript.events.length;
       const runStartedAtMs = Date.now();
@@ -588,7 +583,6 @@ export const runAgentHarness = createAsyncThunk<
 
       const updateRoomOptionsPixel = createUpdateRoomOptionsPixel(
         chat.roomId,
-        selectEffectiveSystemPrompt({ chat, engines }),
         selectedMcps,
         chat.engineId,
         chat.harnessType,

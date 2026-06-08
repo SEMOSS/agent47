@@ -85,9 +85,8 @@ export function EnginesPanel() {
         </p>
         <h2 className="text-lg font-semibold">Available engines</h2>
         <p className="text-sm text-muted-foreground">
-          Pre-select the engines you want the agent to incorporate. Selected
-          engines are added to the system prompt — the agent can still use
-          others if you mention them.
+          Pre-select the engines you want the agent to incorporate. Mention
+          them in your prompt so the agent uses them.
         </p>
       </div>
 

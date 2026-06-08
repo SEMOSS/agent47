@@ -2,7 +2,6 @@ import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import { v4 as uuidv4 } from "uuid";
 import type { TranscriptHarness } from "@/types/transcript";
 import { createProject, createReactProject } from "./createProjectSlice";
-import type { EnginesState } from "./enginesSlice";
 import { runAgentHarness } from "../thunks/runAgentHarness";
 
 export type ConversationRoom = {
@@ -35,7 +34,6 @@ export interface ChatState {
   roomId: string;
   engineId: string;
   engineDisplayName: string;
-  systemPrompt: string;
   projectId: string;
   /**
    * Workspace ("agent identity") id this chat is bound to.
@@ -143,8 +141,6 @@ const initialState: ChatState = {
   roomId: loadInitialRoomId(),
   engineId: loadInitialEngineId(),
   engineDisplayName: loadInitialEngineDisplayName(),
-  systemPrompt:
-    "You are helping a user build and modify a React application that runs on the SEMOSS platform. Work exclusively within the current working directory — do not read, write, or traverse files in parent directories. Building the app is done exclusively through the \`BuildAndPublishApp\` tool, which takes the project id: \`${projectId}\`. Node, npm, pnpm, and other JavaScript build tooling are not available via Bash. Invoke \`BuildAndPublishApp\` once at the end of any turn that modified source files — not after every individual edit. When the user's request requires platform-specific code (calling models, querying databases, working with storage or vector catalogs), consult the relevant skill before writing code. Skill descriptions cover when to use them. If an agent-memory skill is available, follow its guidance for recalling and persisting lessons.",
   projectId: loadInitialProjectId(),
   workspaceId: loadInitialWorkspaceId(),
   permissionMode: "acceptEdits",
@@ -206,9 +202,6 @@ const chatSlice = createSlice({
     setEngineDisplayName(state, action: PayloadAction<string>) {
       state.engineDisplayName = action.payload;
       writeLocalStorage(LAST_ENGINE_DISPLAY_NAME_KEY, action.payload);
-    },
-    setSystemPrompt(state, action: PayloadAction<string>) {
-      state.systemPrompt = action.payload;
     },
     setProjectId(state, action: PayloadAction<string>) {
       state.projectId = action.payload;
@@ -364,7 +357,6 @@ export const {
   startNewRoom,
   setEngineId,
   setEngineDisplayName,
-  setSystemPrompt,
   setProjectId,
   setWorkspaceId,
   setPermissionMode,
@@ -379,53 +371,5 @@ export const {
   addMessage,
 } = chatSlice.actions;
 export { createRoomId };
-
-type EngineContextDescriptor = {
-  noun: string;
-  skill: string;
-};
-
-const ENGINE_CONTEXT: Record<keyof EnginesState["selectedEngines"], EngineContextDescriptor> = {
-  MODEL: { noun: "models", skill: "model-engine" },
-  DATABASE: { noun: "databases", skill: "database-engine" },
-  STORAGE: { noun: "storage engines", skill: "storage-engine" },
-  VECTOR: { noun: "vector databases", skill: "vector-engine" },
-};
-
-const buildEngineContextBlock = (engines: EnginesState["selectedEngines"]): string => {
-  const lines: string[] = [];
-  (Object.keys(ENGINE_CONTEXT) as Array<keyof typeof ENGINE_CONTEXT>).forEach(
-    (type) => {
-      const list = engines[type];
-      if (!list?.length) return;
-      const formatted = list
-        .map((engine) => `NAME: ${engine.name}, ID: ${engine.id}`)
-        .join("; ");
-      const { noun, skill } = ENGINE_CONTEXT[type];
-      lines.push(
-        `The user would like to incorporate the following ${noun} into the application: ${formatted}. You can reference how to query and use these ${noun} in the ${skill} skill. If the user does not mention these ${noun} in their prompt, do not feel the need to FORCE their use.`,
-      );
-    },
-  );
-  if (lines.length === 0) return "";
-  lines.push(
-    "You may still use any other engines the user requests in their prompt — you are not limited to the engines listed above.",
-  );
-  return lines.join(" ");
-};
-
-export const selectEffectiveSystemPrompt = (state: {
-  chat: ChatState;
-  engines?: EnginesState;
-}): string => {
-  const { systemPrompt, projectId } = state.chat;
-  const base = projectId
-    ? `THE PROJECT ID IS ${projectId}. ${systemPrompt}`
-    : systemPrompt;
-  const engineBlock = state.engines
-    ? buildEngineContextBlock(state.engines.selectedEngines)
-    : "";
-  return engineBlock ? `${base} ${engineBlock}` : base;
-};
 
 export default chatSlice.reducer;
