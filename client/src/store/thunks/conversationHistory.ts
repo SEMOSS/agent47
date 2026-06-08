@@ -186,6 +186,38 @@ const stringifyToolOutput = (value: unknown): string | undefined => {
   }
 };
 
+/**
+ * Normalizes a SEMOSS backend timestamp to a UTC ISO-8601 string.
+ *
+ * <p>Playground `dateCreated` values arrive space-separated and without a
+ * timezone designator (e.g. "2026-06-08 23:00:00") and represent UTC
+ * wall-clock. Left as-is, `Date.parse`/`new Date` interpret them as the
+ * viewer's local time, so the value drifts by the local UTC offset. That
+ * desyncs history-synced events from live events (which are stamped with
+ * `new Date().toISOString()`) and corrupts the timeline ordering in
+ * ChatInterface, which sorts on `Date.parse(timestamp)`. Treating the
+ * wall-clock as UTC keeps every transcript event on a single clock.
+ */
+export const normalizeSemossTimestampToIso = (timestamp: string): string => {
+  const trimmed = timestamp?.trim();
+  if (!trimmed) {
+    return timestamp;
+  }
+
+  // Already carries an explicit zone or offset — trust it.
+  if (/[zZ]$/.test(trimmed) || /[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  // Bare "YYYY-MM-DD[ T]HH:mm[:ss][.fff]" with no zone: pin it to UTC.
+  const isoLike = trimmed.replace(" ", "T");
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(isoLike)) {
+    return `${isoLike}Z`;
+  }
+
+  return trimmed;
+};
+
 export const parsePlaygroundMessages = (
   messages: PlaygroundMessage[],
 ): TranscriptEvent[] => {
@@ -199,7 +231,7 @@ export const parsePlaygroundMessages = (
       continue;
     }
 
-    const timestamp = msg.dateCreated ?? "";
+    const timestamp = normalizeSemossTimestampToIso(msg.dateCreated ?? "");
     const modelName = msg.ornaments?.modelName;
 
     for (const [partIndex, part] of parts.entries()) {

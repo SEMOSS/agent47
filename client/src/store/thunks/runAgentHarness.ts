@@ -15,6 +15,7 @@ import {
 import { fetchCommitHistory } from "../slices/gitSlice";
 import type { AssistantText } from "@/types/transcript";
 import {
+  normalizeSemossTimestampToIso,
   parsePlaygroundMessages,
   type PlaygroundMessage,
 } from "./conversationHistory";
@@ -136,20 +137,8 @@ const POLLING_INTERVAL_MS = 300;
 const SEMOSS_HISTORY_SYNC_CLOCK_SKEW_MS = 60_000;
 
 const parseSemossTimestamp = (timestamp: string) => {
-  const parsed = Date.parse(timestamp);
-  if (Number.isFinite(parsed)) {
-    return parsed;
-  }
-
-  if (timestamp.includes(" ")) {
-    const normalized = timestamp.replace(" ", "T");
-    const normalizedParsed = Date.parse(normalized);
-    if (Number.isFinite(normalizedParsed)) {
-      return normalizedParsed;
-    }
-  }
-
-  return null;
+  const parsed = Date.parse(normalizeSemossTimestampToIso(timestamp));
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const createSemossFallbackTranscriptEvents = (
@@ -744,7 +733,17 @@ export const runAgentHarness = createAsyncThunk<
                 eventTime == null ||
                 eventTime >= runStartedAtMs - SEMOSS_HISTORY_SYNC_CLOCK_SKEW_MS;
 
-              if (event.kind !== "user-prompt" && isCurrentRunEvent) {
+              // Only backfill tool events from history: the persisted store
+              // carries fuller tool args/results than the compacted live
+              // stream. User prompts and assistant text are already owned by
+              // the live stream (+ ensureSemossFinalAssistantText), and their
+              // history copies use backend message ids that don't match the
+              // streamed event ids — re-adding them would double the bubble.
+              const isToolEvent =
+                event.kind === "tool-invocation" ||
+                event.kind === "tool-result";
+
+              if (isToolEvent && isCurrentRunEvent) {
                 dispatch(addTranscriptEvent(event));
               }
             }
