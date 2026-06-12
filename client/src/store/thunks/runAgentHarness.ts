@@ -365,9 +365,14 @@ const getSemossTextBlockId = (
   state: SemossStreamState,
   jobId: string,
   streamType: "content" | "thinking",
+  forceNewBlock = false,
 ) => {
   if (streamType === "thinking") {
-    if (state.lastRenderableType !== "thinking" || !state.currentThinkingBlockId) {
+    if (
+      forceNewBlock ||
+      state.lastRenderableType !== "thinking" ||
+      !state.currentThinkingBlockId
+    ) {
       state.currentThinkingBlockId = `semoss-thinking-${jobId}-${state.thinkingBlockCounter}`;
       state.thinkingBlockCounter += 1;
     }
@@ -383,6 +388,75 @@ const getSemossTextBlockId = (
   return state.currentAssistantBlockId;
 };
 
+const THINKING_SECTION_HEADING_PATTERN = /\*\*[A-Z][^*\n]{2,100}\*\*/g;
+const THINKING_SECTION_HEADING_AT_START_PATTERN = /^\s*\*\*[A-Z][^*\n]{2,100}\*\*/;
+
+const splitSemossThinkingSections = (text: string): string[] => {
+  const matches = Array.from(text.matchAll(THINKING_SECTION_HEADING_PATTERN));
+  if (matches.length <= 1) {
+    return [text];
+  }
+
+  const sections: string[] = [];
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].index ?? 0;
+    const end = i + 1 < matches.length ? matches[i + 1].index ?? text.length : text.length;
+    const section = text.slice(start, end);
+    if (section) {
+      sections.push(section);
+    }
+  }
+
+  const firstStart = matches[0].index ?? 0;
+  if (firstStart > 0) {
+    const prefix = text.slice(0, firstStart);
+    if (prefix) {
+      sections.unshift(prefix);
+    }
+  }
+
+  return sections.length > 0 ? sections : [text];
+};
+
+const createSemossTextEvent = ({
+  data,
+  jobId,
+  streamState,
+  streamType,
+  text,
+  forceNewBlock,
+}: {
+  data: Record<string, unknown>;
+  jobId: string;
+  streamState: SemossStreamState;
+  streamType: "content" | "thinking";
+  text: string;
+  forceNewBlock?: boolean;
+}): Record<string, unknown> => {
+  const eventId = getSemossTextBlockId(
+    streamState,
+    jobId,
+    streamType,
+    forceNewBlock,
+  );
+
+  return {
+    ...data,
+    kind: "assistant-text",
+    eventId,
+    text,
+    display: streamType === "thinking" ? "intent" : undefined,
+    isPartial:
+      typeof data.finish_reason === "string"
+        ? data.finish_reason !== "completed"
+        : true,
+    timestamp:
+      typeof data.timestamp === "string"
+        ? data.timestamp
+        : new Date().toISOString(),
+  };
+};
+
 const normalizeSemossStreamingChunk = ({
   streamMessage,
   jobId,
@@ -391,7 +465,7 @@ const normalizeSemossStreamingChunk = ({
   streamMessage: StreamMessage;
   jobId: string;
   streamState: SemossStreamState;
-}): unknown => {
+}): unknown | unknown[] => {
   const data = streamMessage.data ?? {};
 
   if (streamMessage.stream_type === "content" || streamMessage.stream_type === "thinking") {
@@ -432,27 +506,37 @@ const normalizeSemossStreamingChunk = ({
       return streamMessage;
     }
 
-    const eventId = getSemossTextBlockId(
-      streamState,
-      jobId,
-      streamMessage.stream_type,
-    );
+    if (streamMessage.stream_type === "thinking") {
+      const sections = splitSemossThinkingSections(textValue);
+      if (sections.length > 1) {
+        return sections.map((section, index) =>
+          createSemossTextEvent({
+            data,
+            jobId,
+            streamState,
+            streamType: "thinking",
+            text: section,
+            forceNewBlock:
+              index > 0 ||
+              (index === 0 &&
+                Boolean(streamState.currentThinkingBlockId) &&
+                THINKING_SECTION_HEADING_AT_START_PATTERN.test(section)),
+          }),
+        );
+      }
+    }
 
-    return {
-      ...data,
-      kind: "assistant-text",
-      eventId,
+    return createSemossTextEvent({
+      data,
+      jobId,
+      streamState,
+      streamType: streamMessage.stream_type,
       text: textValue,
-      display: streamMessage.stream_type === "thinking" ? "intent" : undefined,
-      isPartial:
-        typeof data.finish_reason === "string"
-          ? data.finish_reason !== "completed"
-          : true,
-      timestamp:
-        typeof data.timestamp === "string"
-          ? data.timestamp
-          : new Date().toISOString(),
-    };
+      forceNewBlock:
+        streamMessage.stream_type === "thinking" &&
+        THINKING_SECTION_HEADING_AT_START_PATTERN.test(textValue) &&
+        Boolean(streamState.currentThinkingBlockId),
+    });
   }
 
   if (streamMessage.stream_type !== "tool") {
@@ -650,12 +734,21 @@ export const runAgentHarness = createAsyncThunk<
                 continue;
               }
 
-              const events = parseTranscriptMessage(
-                normalizedStreamMsg,
-                chat.harnessType,
-              );
-              for (const event of events) {
-                dispatch(addTranscriptEvent(event));
+              const normalizedMessages = Array.isArray(normalizedStreamMsg)
+                ? normalizedStreamMsg
+                : [normalizedStreamMsg];
+
+              for (const normalizedMessage of normalizedMessages) {
+                if (!normalizedMessage) {
+                  continue;
+                }
+                const events = parseTranscriptMessage(
+                  normalizedMessage,
+                  chat.harnessType,
+                );
+                for (const event of events) {
+                  dispatch(addTranscriptEvent(event));
+                }
               }
             }
           }
