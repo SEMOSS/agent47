@@ -215,6 +215,19 @@ const formatToolOutputPreview = (value: string, maxLength = 160) =>
         maxLength,
     );
 
+const splitLeadingBoldTitle = (value: string) => {
+    const trimmed = value.trim();
+    const match = trimmed.match(/^\*\*([^*\n]{2,120})\*\*\s*([\s\S]*)$/);
+    if (!match) {
+        return { title: undefined, body: trimmed };
+    }
+
+    return {
+        title: match[1].trim(),
+        body: match[2].trim(),
+    };
+};
+
 const buildStatsSummary = (stats: ToolStats): string => {
     const parts: string[] = [];
     if (stats.readCount > 0) parts.push(`${stats.readCount} reads`);
@@ -249,7 +262,7 @@ const ToolInvocationBubble = ({ event }: { event: ToolInvocation }) => {
 
         return (
             <div className="flex flex-col gap-1 items-start">
-                <div className="flex items-start gap-2 max-w-[75%] rounded-xl border border-blue-200/80 dark:border-blue-400/20 bg-blue-50/80 dark:bg-blue-950/25 px-3 py-2 text-xs text-blue-900/80 dark:text-blue-100/80">
+                <div className="flex items-start gap-2 max-w-[82%] sm:max-w-[70%] rounded-lg border border-blue-200/70 dark:border-blue-400/20 bg-blue-50/65 dark:bg-blue-950/20 px-3 py-2 text-xs text-blue-900/80 dark:text-blue-100/80 shadow-sm shadow-blue-900/5">
                     <Sparkles className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-500 dark:text-blue-300" />
                     <div className="min-w-0 flex-1">
                         <span className="font-medium break-words">
@@ -273,15 +286,17 @@ const ToolInvocationBubble = ({ event }: { event: ToolInvocation }) => {
 
     return (
         <div className="flex flex-col gap-1 items-start">
-            <div className="flex items-start gap-2 max-w-[75%] rounded-xl border border-dashed border-slate-300 dark:border-white/15 bg-slate-50/80 dark:bg-zinc-800/40 px-3 py-2 text-xs text-muted-foreground">
-                <Icon className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-500 dark:text-blue-400" />
+            <div className="flex items-start gap-2 max-w-[82%] sm:max-w-[68%] rounded-lg border border-slate-200/80 dark:border-white/10 bg-white/65 dark:bg-zinc-900/35 px-3 py-2 text-xs text-muted-foreground shadow-sm shadow-slate-900/5">
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
+                    <Icon className="h-3.5 w-3.5" />
+                </span>
                 <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 flex-col gap-0.5">
-                        <span className="font-medium text-foreground/80 break-words">
+                        <span className="font-semibold text-foreground/80 break-words leading-tight">
                             {label}
                         </span>
                         {argsSummary && (
-                            <span className="break-words text-muted-foreground">
+                            <span className="break-words text-muted-foreground/85 leading-snug">
                                 {argsSummary}
                             </span>
                         )}
@@ -336,10 +351,10 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
 
     return (
         <div className="flex flex-col gap-1 items-start">
-            <div className="flex flex-col max-w-[75%] rounded-xl border border-dashed border-slate-300 dark:border-white/15 bg-slate-50/80 dark:bg-zinc-800/40 px-3 py-2 text-xs">
+            <div className="flex flex-col max-w-[82%] sm:max-w-[68%] rounded-lg border border-slate-200/80 dark:border-white/10 bg-white/55 dark:bg-zinc-900/30 px-3 py-2 text-xs shadow-sm shadow-slate-900/5">
                 <button
                     type="button"
-                    className="flex items-center gap-2 w-full text-left"
+                    className="flex items-center gap-1.5 w-full text-left"
                     onClick={() => hasContent && setExpanded(!expanded)}
                     disabled={!hasContent}
                 >
@@ -350,11 +365,11 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
                             className={`h-3.5 w-3.5 shrink-0 ${statusColor} ${isRunning ? "animate-spin" : ""}`}
                         />
                     )}
-                    <span className="font-medium text-foreground/80">
+                    <span className="font-semibold text-foreground/80 leading-tight">
                         {toolLabel}
                     </span>
                     {(hasContent || event.durationMs > 0) && (
-                        <span className="text-muted-foreground/60">
+                        <span className="text-muted-foreground/45">
                             {"\u00b7"}
                         </span>
                     )}
@@ -362,7 +377,7 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
                         className={`h-3 w-3 shrink-0 ${statusColor} ${hasContent ? "" : "hidden"} ${isRunning ? "animate-spin" : ""}`}
                     />
                     {event.durationMs > 0 && (
-                        <span className="text-muted-foreground">
+                        <span className="text-muted-foreground/80">
                             {formatDuration(event.durationMs)}
                         </span>
                     )}
@@ -381,17 +396,17 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
                     </span>
                 </button>
                 {statsSummary && (
-                    <span className="mt-1 text-[11px] text-muted-foreground/70 pl-5.5">
+                    <span className="mt-1 text-[11px] text-muted-foreground/65 pl-6">
                         {statsSummary}
                     </span>
                 )}
                 {hasContent && !expanded && (
-                    <p className="mt-1.5 text-[11px] text-muted-foreground/70 pl-5.5 line-clamp-2">
+                    <p className="mt-1 text-[11px] text-muted-foreground/65 pl-6 line-clamp-1">
                         {formatToolOutputPreview(previewContent)}
                     </p>
                 )}
                 {hasContent && expanded && (
-                    <div className="mt-2 pl-5.5 text-[12px] text-foreground/80 max-h-[400px] overflow-y-auto">
+                    <div className="mt-2 pl-6 text-[12px] text-foreground/80 max-h-[360px] overflow-y-auto">
                         <MarkdownRenderer content={expandedContent!} />
                     </div>
                 )}
@@ -400,21 +415,37 @@ const ToolResultBubble = ({ event }: { event: ToolResult }) => {
     );
 };
 
-const AssistantIntentBubble = ({ event }: { event: AssistantText }) => (
-    <div className="flex flex-col gap-1 items-start">
-        <div className="flex items-start gap-2 max-w-[75%] rounded-xl border border-dashed border-slate-300 dark:border-white/15 bg-slate-50/80 dark:bg-zinc-800/40 px-3 py-2 text-xs text-muted-foreground">
-            <Sparkles className="h-3.5 w-3.5 shrink-0 mt-0.5 text-violet-500 dark:text-violet-400" />
-            <div className="min-w-0 flex-1">
-                <span className="font-medium text-foreground/80 break-words">
-                    {event.text}
+const AssistantIntentBubble = ({ event }: { event: AssistantText }) => {
+    const { title, body } = splitLeadingBoldTitle(event.text);
+
+    return (
+        <div className="flex flex-col gap-1 items-start">
+            <div className="flex items-start gap-2 max-w-[82%] sm:max-w-[68%] rounded-lg border border-violet-200/70 dark:border-violet-400/15 bg-violet-50/45 dark:bg-violet-950/15 px-3 py-2 text-xs text-muted-foreground shadow-sm shadow-violet-900/5">
+                <Sparkles className="h-3.5 w-3.5 shrink-0 mt-0.5 text-violet-500 dark:text-violet-400" />
+                <div className="min-w-0 flex-1 leading-snug">
+                    {title && (
+                        <div className="font-semibold text-foreground/80">
+                            {title}
+                        </div>
+                    )}
+                    {body && (
+                        <p className="mt-0.5 break-words text-muted-foreground/90">
+                            {body}
+                        </p>
+                    )}
+                    {!title && !body && (
+                        <p className="break-words text-muted-foreground/90">
+                            {event.text}
+                        </p>
+                    )}
+                </div>
+                <span className="shrink-0 text-[10px] text-muted-foreground/55">
+                    {formatTimestamp(event.timestamp)}
                 </span>
             </div>
-            <span className="shrink-0 text-[10px] text-muted-foreground/60">
-                {formatTimestamp(event.timestamp)}
-            </span>
         </div>
-    </div>
-);
+    );
+};
 
 const AssistantMessageBubble = ({ event }: { event: AssistantText }) => (
     <div className="flex flex-col gap-1 items-start">
