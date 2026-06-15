@@ -613,15 +613,9 @@ const normalizeSemossStreamingChunk = ({
 // COMPLETED|FAILED|CANCELLED). The backend captures a harness failure AS
 // status=FAILED/CANCELLED + errorMessage on a completed job — it does not throw
 // — so we detect failures from this record, not from errors[].
-type RunAgentOutput = {
-  status?: string;
-  finalText?: string;
-  errorMessage?: string;
-  harnessType?: string;
-  runId?: string;
-  roomId?: string;
-  jobId?: string;
-};
+// This is the full run record (success + failure); it reuses the shared
+// AgentRunFailureDetail field shape (the failure-relevant subset) plus finalText.
+type RunAgentOutput = AgentRunFailureDetail & { finalText?: string };
 
 const FAILED_RUN_STATUSES = new Set(["FAILED", "CANCELLED"]);
 
@@ -839,8 +833,9 @@ export const runAgentHarness = createAsyncThunk<
 
             if (response.status === "Error") {
               // A terminal ERROR job status is a genuine run failure — NOT the
-              // maxTurns cap, which completes normally and is surfaced via
-              // result.errors below. We have no detail here, so stay generic.
+              // maxTurns cap, which completes the job and is surfaced from the
+              // run record below (status FAILED/CANCELLED). We have no detail
+              // here, so stay generic.
               throw new Error(
                 "The agent run failed before completing your request. Please try again.",
               );

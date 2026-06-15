@@ -170,18 +170,17 @@ const MessageBubble = ({
       ).filter((row): row is [string, string] => Boolean(row[1]))
     : [];
 
-  const copyErrorDetail = () => {
+  const copyErrorDetail = async () => {
     const text = [content, "", ...errorDetailRows.map(([k, v]) => `${k}: ${v}`)]
       .join("\n")
       .trim();
-    if (!navigator.clipboard) {
-      toast.error("Clipboard unavailable");
-      return;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Error details copied");
+    } catch (error) {
+      console.error("Failed to copy error details:", error);
+      toast.error("Failed to copy error details");
     }
-    navigator.clipboard.writeText(text).then(
-      () => toast.success("Error details copied"),
-      () => toast.error("Failed to copy error details"),
-    );
   };
 
   return (
@@ -348,7 +347,7 @@ export const ChatInterface = () => {
   }, [maxTurns]);
 
   const commitMaxTurns = () => {
-    const next = sanitizeMaxTurns(Number.parseInt(maxTurnsDraft, 10));
+    const next = sanitizeMaxTurns(maxTurnsDraft);
     dispatch(setMaxTurns(next));
     setMaxTurnsDraft(String(next));
   };

@@ -384,8 +384,10 @@ const chatSlice = createSlice({
     builder.addCase(runAgentHarness.rejected, (state, action) => {
       if (state.pendingMessageId) {
         // The thunk rejects with { message, detail } via rejectWithValue; fall
-        // back to the generic copy only when no message was provided.
-        const payload = action.payload as RunErrorPayload | undefined;
+        // back to the generic copy only when no message was provided. RTK infers
+        // action.payload as RunErrorPayload | undefined from the thunk's typed
+        // rejectValue, so no cast is needed here.
+        const payload = action.payload;
         const content =
           payload?.message || "Something went wrong. Please try again.";
         state.messages.push(makeSystemErrorMessage(content, payload?.detail));
