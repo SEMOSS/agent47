@@ -146,12 +146,43 @@ const MessageBubble = ({
   time,
   content,
   status,
+  errorDetail,
 }: ChatMessage) => {
   const isUser = role === "user";
   const isSystem = role === "system";
   const isLoading = status === "loading";
   const isStreaming = status === "streaming";
   const isError = status === "error";
+  const [errorExpanded, setErrorExpanded] = useState(false);
+
+  // Key/value debug rows for a failed run (empties dropped); shown in the
+  // expandable detail panel and copied verbatim.
+  const errorDetailRows = errorDetail
+    ? (
+        [
+          ["status", errorDetail.status],
+          ["error", errorDetail.errorMessage],
+          ["harness", errorDetail.harnessType],
+          ["runId", errorDetail.runId],
+          ["roomId", errorDetail.roomId],
+          ["jobId", errorDetail.jobId],
+        ] as Array<[string, string | undefined]>
+      ).filter((row): row is [string, string] => Boolean(row[1]))
+    : [];
+
+  const copyErrorDetail = () => {
+    const text = [content, "", ...errorDetailRows.map(([k, v]) => `${k}: ${v}`)]
+      .join("\n")
+      .trim();
+    if (!navigator.clipboard) {
+      toast.error("Clipboard unavailable");
+      return;
+    }
+    navigator.clipboard.writeText(text).then(
+      () => toast.success("Error details copied"),
+      () => toast.error("Failed to copy error details"),
+    );
+  };
 
   return (
     <div
@@ -187,10 +218,48 @@ const MessageBubble = ({
             <span className="inline-block ml-1 h-3 w-0.5 animate-pulse bg-foreground/60" />
           </div>
         ) : isError ? (
-          <span className="flex items-start gap-2 text-xs">
-            <TriangleAlert className="h-4 w-4 shrink-0" />
-            <span>{content}</span>
-          </span>
+          <div className="flex flex-col gap-1.5 text-xs">
+            <span className="flex items-start gap-2">
+              <TriangleAlert className="h-4 w-4 shrink-0" />
+              <span>{content}</span>
+            </span>
+            {errorDetailRows.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setErrorExpanded((prev) => !prev)}
+                className="flex items-center gap-1 self-start text-[11px] font-medium text-red-700/80 hover:text-red-700 dark:text-red-300/80 dark:hover:text-red-300"
+              >
+                {errorExpanded ? (
+                  <ChevronUp className="h-3 w-3" />
+                ) : (
+                  <ChevronDown className="h-3 w-3" />
+                )}
+                Details
+              </button>
+            ) : null}
+            {errorDetailRows.length > 0 && errorExpanded ? (
+              <div className="relative max-h-[280px] overflow-y-auto rounded-md border border-red-300/50 bg-red-100/40 p-2 pr-7 font-mono text-[11px] leading-relaxed dark:border-red-500/20 dark:bg-red-950/40">
+                <button
+                  type="button"
+                  onClick={copyErrorDetail}
+                  aria-label="Copy error details"
+                  className="absolute right-1 top-1 rounded p-1 text-red-700/70 hover:bg-red-200/50 hover:text-red-700 dark:text-red-300/70 dark:hover:bg-red-900/50"
+                >
+                  <Copy className="h-3 w-3" />
+                </button>
+                {errorDetailRows.map(([key, value]) => (
+                  <div key={key} className="flex gap-2">
+                    <span className="shrink-0 text-red-700/55 dark:text-red-300/55">
+                      {key}
+                    </span>
+                    <span className="whitespace-pre-wrap break-words">
+                      {value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
         ) : isSystem ? (
           <span className="text-xs">{content}</span>
         ) : (

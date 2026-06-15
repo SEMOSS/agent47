@@ -11,6 +11,26 @@ export type ConversationRoom = {
   pinned: boolean;
 };
 
+/**
+ * Structured detail for a failed {@code RunAgent} run, surfaced in the error
+ * bubble for debugging. Sourced from the durable run record the reactor returns
+ * ({@code status}, {@code errorMessage}, plus run/room identifiers).
+ */
+export type AgentRunFailureDetail = {
+  status?: string;
+  errorMessage?: string;
+  harnessType?: string;
+  runId?: string;
+  roomId?: string;
+  jobId?: string;
+};
+
+/** Payload the {@code runAgentHarness} thunk rejects with. */
+export type RunErrorPayload = {
+  message: string;
+  detail?: AgentRunFailureDetail;
+};
+
 export type ChatMessage = {
   id: string;
   author: string;
@@ -20,6 +40,8 @@ export type ChatMessage = {
   createdAt: number;
   content: string;
   status?: "loading" | "streaming" | "complete" | "error";
+  /** Present on a system error message: structured failure detail for the UI. */
+  errorDetail?: AgentRunFailureDetail;
 };
 
 export type PermissionMode =
@@ -202,7 +224,10 @@ const getAuthorLabel = (
   }
 };
 
-const makeSystemErrorMessage = (content: string): ChatMessage => {
+const makeSystemErrorMessage = (
+  content: string,
+  detail?: AgentRunFailureDetail,
+): ChatMessage => {
   const now = new Date();
   return {
     id: createMessageId(),
@@ -212,6 +237,7 @@ const makeSystemErrorMessage = (content: string): ChatMessage => {
     createdAt: now.getTime(),
     content,
     status: "error",
+    errorDetail: detail,
   };
 };
 
@@ -357,12 +383,12 @@ const chatSlice = createSlice({
     });
     builder.addCase(runAgentHarness.rejected, (state, action) => {
       if (state.pendingMessageId) {
-        // The thunk rejects with the real error message via rejectWithValue;
-        // fall back to the generic copy only when none was provided.
+        // The thunk rejects with { message, detail } via rejectWithValue; fall
+        // back to the generic copy only when no message was provided.
+        const payload = action.payload as RunErrorPayload | undefined;
         const content =
-          (action.payload as string | undefined) ||
-          "Something went wrong. Please try again.";
-        state.messages.push(makeSystemErrorMessage(content));
+          payload?.message || "Something went wrong. Please try again.";
+        state.messages.push(makeSystemErrorMessage(content, payload?.detail));
         state.pendingMessageId = null;
       }
     });
