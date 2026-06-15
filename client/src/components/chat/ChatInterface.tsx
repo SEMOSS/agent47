@@ -10,6 +10,7 @@ import {
   Sparkles,
   SquarePen,
   Trash2,
+  TriangleAlert,
 } from "lucide-react";
 import {
   type ChangeEvent,
@@ -67,12 +68,15 @@ import { buildIssuesRepairPrompt } from "@/lib/previewIssues";
 import { useAppDispatch, useAppSelector } from "@/store";
 import {
   type ChatMessage,
+  DEFAULT_MAX_TURNS,
   type HarnessType,
   type PermissionMode,
+  sanitizeMaxTurns,
   setEngineDisplayName,
   setEngineId,
   setHarnessType,
   setInputMessage,
+  setMaxTurns,
   setPermissionMode,
   setWorkspaceId,
   startNewRoom,
@@ -147,6 +151,7 @@ const MessageBubble = ({
   const isSystem = role === "system";
   const isLoading = status === "loading";
   const isStreaming = status === "streaming";
+  const isError = status === "error";
 
   return (
     <div
@@ -164,8 +169,11 @@ const MessageBubble = ({
           isUser &&
             "bg-gradient-to-r from-slate-700 to-slate-800 dark:from-slate-600 dark:to-slate-700 text-white shadow-md shadow-slate-500/15",
           !isUser &&
+            !isError &&
             "bg-white/90 dark:bg-zinc-800/70 text-foreground border border-slate-200/50 dark:border-white/10 shadow-sm",
-          isSystem && "border-dashed",
+          isSystem && !isError && "border-dashed",
+          isError &&
+            "border border-red-300/70 bg-red-50/80 text-red-700 dark:border-red-500/30 dark:bg-red-950/30 dark:text-red-300",
         )}
       >
         {isLoading ? (
@@ -178,6 +186,11 @@ const MessageBubble = ({
             <MarkdownRenderer content={content} />
             <span className="inline-block ml-1 h-3 w-0.5 animate-pulse bg-foreground/60" />
           </div>
+        ) : isError ? (
+          <span className="flex items-start gap-2 text-xs">
+            <TriangleAlert className="h-4 w-4 shrink-0" />
+            <span>{content}</span>
+          </span>
         ) : isSystem ? (
           <span className="text-xs">{content}</span>
         ) : (
@@ -205,6 +218,7 @@ export const ChatInterface = () => {
     workspaceId,
     permissionMode,
     harnessType,
+    maxTurns,
     inputMessage,
     messages,
     pendingMessageId,
@@ -255,6 +269,20 @@ export const ChatInterface = () => {
   const [engineLoading, setEngineLoading] = useState(false);
   const [pendingHarnessType, setPendingHarnessType] =
     useState<HarnessType | null>(null);
+  // Local draft so the field can be cleared/typed freely; committed (and
+  // sanitized) to the store on blur.
+  const [maxTurnsDraft, setMaxTurnsDraft] = useState(String(maxTurns));
+
+  // Keep the draft aligned when the store value changes from elsewhere.
+  useEffect(() => {
+    setMaxTurnsDraft(String(maxTurns));
+  }, [maxTurns]);
+
+  const commitMaxTurns = () => {
+    const next = sanitizeMaxTurns(Number.parseInt(maxTurnsDraft, 10));
+    dispatch(setMaxTurns(next));
+    setMaxTurnsDraft(String(next));
+  };
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const previousMessageCountRef = useRef(0);
@@ -654,7 +682,10 @@ export const ChatInterface = () => {
     if (!justFinished) return;
 
     const lastMessage = messages[messages.length - 1];
-    if (lastMessage?.status === "error") return;
+    if (lastMessage?.status === "error") {
+      toast.error("The agent didn't finish your request.", { duration: 4000 });
+      return;
+    }
 
     toast.success("Response complete", { duration: 2000 });
   }, [isStreaming, messages]);
@@ -1333,6 +1364,31 @@ export const ChatInterface = () => {
                               config (subdir, hooks, MCPs, system prompt) from
                               WORKSPACE.CONFIG_JSON. Leave blank for legacy
                               behavior.
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="max-turns">Max Turns</Label>
+                            <Input
+                              id="max-turns"
+                              type="number"
+                              min={1}
+                              step={1}
+                              inputMode="numeric"
+                              value={maxTurnsDraft}
+                              onChange={(event) =>
+                                setMaxTurnsDraft(event.target.value)
+                              }
+                              onBlur={commitMaxTurns}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  commitMaxTurns();
+                                  event.currentTarget.blur();
+                                }
+                              }}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Maximum number of agent turns per message.
+                              Defaults to {DEFAULT_MAX_TURNS}.
                             </p>
                           </div>
                         </div>

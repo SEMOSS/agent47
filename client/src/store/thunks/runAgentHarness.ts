@@ -605,6 +605,30 @@ const normalizeSemossStreamingChunk = ({
   };
 };
 
+// A RunAgent failure does NOT throw the pixel job into an ERROR status. The
+// reactor throws (e.g. the SEMOSS harness hits its maxTurns cap and throws
+// AgentMaxTurnsException — "Agent loop exceeded max turns (N) without producing
+// a final RESPONSE_TEXT"), but the engine's translation layer catches it and
+// records it as an ERROR-typed pixel result. So the job completes normally
+// (PROGRESS_COMPLETE) and the reason is delivered to the client in
+// getPixelAsyncResult().errors[], not as a terminal "Error" job status. We
+// translate that detail into user-facing copy: the maxTurns cap is the common,
+// user-fixable case and gets actionable guidance; any other failure surfaces
+// its detail so the cause isn't hidden. (Only the SEMOSS harness enforces
+// maxTurns, so the "max turns" marker only ever appears for it.)
+const buildRunFailureMessage = (
+  errorDetail: string,
+  maxTurns: number,
+): string => {
+  const detail = errorDetail.trim();
+  if (/max turns/i.test(detail)) {
+    return `The agent stopped after reaching its limit of ${maxTurns} turns before completing your request. Send "continue" to keep going, or raise the limit in Settings → Max Turns.`;
+  }
+  return detail
+    ? `The agent didn't finish your request: ${detail}`
+    : "The agent didn't finish your request. Please try again.";
+};
+
 export const runAgentHarness = createAsyncThunk<
   { response: string },
   {
@@ -681,10 +705,14 @@ export const runAgentHarness = createAsyncThunk<
         permissionMode: chat.permissionMode,
       };
 
-      // SEMOSS harness drives its own tool loop and benefits from an explicit
-      // maxTurns cap. CLI harnesses (claude_code, github_copilot_py) manage their
-      // own loops and ignore the cap.
-      const maxTurnsPart = chat.harnessType === "semoss" ? ", maxTurns=30" : "";
+      // maxTurns is an OPTIONAL key on the RunAgent reactor: it's parsed for
+      // every harness but only the SEMOSS harness consumes it (to bound its
+      // tool loop and throw AgentMaxTurnsException at the cap). The CLI
+      // harnesses (claude_code, github_copilot_py) never read it — they run
+      // their own loops — so forwarding it unconditionally is safe (including
+      // it is equivalent to omitting it for them). User-configurable in
+      // Settings; falls back to DEFAULT_MAX_TURNS.
+      const maxTurnsPart = `, maxTurns=${chat.maxTurns}`;
 
       // When a workspace id is configured, pass it as a named arg on RunAgent
       // so the backend AgentRunner overlays it onto the room for the duration
@@ -757,7 +785,12 @@ export const runAgentHarness = createAsyncThunk<
             isPolling = false;
 
             if (response.status === "Error") {
-              throw new Error("Streaming job encountered an error");
+              // A terminal ERROR job status is a genuine run failure — NOT the
+              // maxTurns cap, which completes normally and is surfaced via
+              // result.errors below. We have no detail here, so stay generic.
+              throw new Error(
+                "The agent run failed before completing your request. Please try again.",
+              );
             }
           }
 
@@ -774,14 +807,18 @@ export const runAgentHarness = createAsyncThunk<
 
       const result = await getPixelAsyncResult<[unknown, string]>(jobId);
 
+      // RunAgent surfaces failures (e.g. the SEMOSS maxTurns cap) here, as pixel
+      // errors on an otherwise-completed job — see buildRunFailureMessage.
       if (result.errors.length > 0) {
-        throw new Error(result.errors.join(""));
+        throw new Error(
+          buildRunFailureMessage(result.errors.join("\n"), chat.maxTurns),
+        );
       }
 
       const finalResponse =
         result.results.length > 1
-          ? (result.results[1].output as string)
-          : (result.results[0].output as string);
+          ? (result.results[1]?.output as string)
+          : (result.results[0]?.output as string);
 
       if (
         chat.harnessType === "semoss" &&
@@ -886,7 +923,11 @@ export const runAgentHarness = createAsyncThunk<
       return { response: finalResponse ?? "" };
     } catch (error) {
       console.error("runAgentHarness streaming error:", error);
-      return rejectWithValue("Failed to run the selected agent.");
+      return rejectWithValue(
+        error instanceof Error
+          ? error.message
+          : "Failed to run the selected agent.",
+      );
     }
   },
 );
