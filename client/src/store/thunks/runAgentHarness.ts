@@ -750,6 +750,7 @@ export const runAgentHarness = createAsyncThunk<
       const paramMap = {
         project: targetProjectId,
         permissionMode: chat.permissionMode,
+        thinking: true,
       };
 
       // maxTurns is an OPTIONAL key on the RunAgent reactor: it's parsed for
