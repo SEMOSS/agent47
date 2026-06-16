@@ -11,6 +11,26 @@ export type ConversationRoom = {
   pinned: boolean;
 };
 
+/**
+ * Structured detail for a failed {@code RunAgent} run, surfaced in the error
+ * bubble for debugging. Sourced from the durable run record the reactor returns
+ * ({@code status}, {@code errorMessage}, plus run/room identifiers).
+ */
+export type AgentRunFailureDetail = {
+  status?: string;
+  errorMessage?: string;
+  harnessType?: string;
+  runId?: string;
+  roomId?: string;
+  jobId?: string;
+};
+
+/** Payload the {@code runAgentHarness} thunk rejects with. */
+export type RunErrorPayload = {
+  message: string;
+  detail?: AgentRunFailureDetail;
+};
+
 export type ChatMessage = {
   id: string;
   author: string;
@@ -20,6 +40,8 @@ export type ChatMessage = {
   createdAt: number;
   content: string;
   status?: "loading" | "streaming" | "complete" | "error";
+  /** Present on a system error message: structured failure detail for the UI. */
+  errorDetail?: AgentRunFailureDetail;
 };
 
 export type PermissionMode =
@@ -51,6 +73,12 @@ export interface ChatState {
   workspaceId: string;
   permissionMode: PermissionMode;
   harnessType: HarnessType;
+  /**
+   * Maximum number of agent turns for a single {@code RunAgent} call. Passed
+   * through as the {@code maxTurns} arg on the pixel. Defaults to
+   * {@link DEFAULT_MAX_TURNS}.
+   */
+  maxTurns: number;
   inputMessage: string;
   messages: ChatMessage[];
   pendingMessageId: string | null;
@@ -68,6 +96,14 @@ const LAST_HARNESS_TYPE_KEY = "agent47:lastHarnessType";
 const LAST_ENGINE_ID_KEY = "agent47:lastEngineId";
 const LAST_ENGINE_DISPLAY_NAME_KEY = "agent47:lastEngineDisplayName";
 const LAST_WORKSPACE_ID_KEY = "agent47:lastWorkspaceId";
+const LAST_MAX_TURNS_KEY = "agent47:lastMaxTurns";
+
+/**
+ * Default per-run agent turn cap; used when none is stored or the value is
+ * invalid. Mirrors the backend default {@code AgentConfig.Budgets.DEFAULT_MAX_TURNS}
+ * (= 30); keep in sync if the backend default changes.
+ */
+export const DEFAULT_MAX_TURNS = 30;
 
 const VALID_HARNESS_TYPES: HarnessType[] = [
   "claude_code",
@@ -128,6 +164,18 @@ const loadInitialEngineDisplayName = (): string =>
 const loadInitialWorkspaceId = (): string =>
   readLocalStorage(LAST_WORKSPACE_ID_KEY) ?? "";
 
+// Coerce arbitrary input to a positive integer turn cap, falling back to the
+// default when the value isn't a usable number.
+export const sanitizeMaxTurns = (value: unknown): number => {
+  const n =
+    typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_MAX_TURNS;
+  return Math.floor(n);
+};
+
+const loadInitialMaxTurns = (): number =>
+  sanitizeMaxTurns(readLocalStorage(LAST_MAX_TURNS_KEY));
+
 const loadInitialRoomId = (): string => {
   const projectId = loadInitialProjectId();
   if (projectId) {
@@ -145,6 +193,7 @@ const initialState: ChatState = {
   workspaceId: loadInitialWorkspaceId(),
   permissionMode: "acceptEdits",
   harnessType: loadInitialHarnessType(),
+  maxTurns: loadInitialMaxTurns(),
   inputMessage: "",
   messages: [],
   pendingMessageId: null,
@@ -173,6 +222,23 @@ const getAuthorLabel = (
     default:
       return "You";
   }
+};
+
+const makeSystemErrorMessage = (
+  content: string,
+  detail?: AgentRunFailureDetail,
+): ChatMessage => {
+  const now = new Date();
+  return {
+    id: createMessageId(),
+    author: getAuthorLabel("system"),
+    role: "system",
+    time: formatMessageTime(now),
+    createdAt: now.getTime(),
+    content,
+    status: "error",
+    errorDetail: detail,
+  };
 };
 
 const chatSlice = createSlice({
@@ -217,6 +283,11 @@ const chatSlice = createSlice({
     setHarnessType(state, action: PayloadAction<HarnessType>) {
       state.harnessType = action.payload;
       writeLocalStorage(LAST_HARNESS_TYPE_KEY, action.payload);
+    },
+    setMaxTurns(state, action: PayloadAction<number>) {
+      const next = sanitizeMaxTurns(action.payload);
+      state.maxTurns = next;
+      writeLocalStorage(LAST_MAX_TURNS_KEY, String(next));
     },
     setActiveProject(state, action: PayloadAction<string>) {
       if (state.projectId && state.roomId) {
@@ -310,18 +381,16 @@ const chatSlice = createSlice({
         writeLastRoomId(state.projectId, state.roomId);
       }
     });
-    builder.addCase(runAgentHarness.rejected, (state) => {
+    builder.addCase(runAgentHarness.rejected, (state, action) => {
       if (state.pendingMessageId) {
-        const now = new Date();
-        state.messages.push({
-          id: createMessageId(),
-          author: getAuthorLabel("system"),
-          role: "system",
-          time: formatMessageTime(now),
-          createdAt: now.getTime(),
-          content: "Something went wrong. Please try again.",
-          status: "error",
-        });
+        // The thunk rejects with { message, detail } via rejectWithValue; fall
+        // back to the generic copy only when no message was provided. RTK infers
+        // action.payload as RunErrorPayload | undefined from the thunk's typed
+        // rejectValue, so no cast is needed here.
+        const payload = action.payload;
+        const content =
+          payload?.message || "Something went wrong. Please try again.";
+        state.messages.push(makeSystemErrorMessage(content, payload?.detail));
         state.pendingMessageId = null;
       }
     });
@@ -361,6 +430,7 @@ export const {
   setWorkspaceId,
   setPermissionMode,
   setHarnessType,
+  setMaxTurns,
   setActiveProject,
   setInputMessage,
   bumpIframeRefresh,
