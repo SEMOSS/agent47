@@ -1,5 +1,11 @@
 import type { AppDispatch, RootState } from "@/store";
-import { addMessage, setInputMessage } from "../slices/chatSlice";
+import { parseSlashCommands } from "@/lib/parseSlashCommands";
+import {
+  addMessage,
+  setEffort,
+  setInputMessage,
+  setThinkingEnabled,
+} from "../slices/chatSlice";
 import { runAgentHarness } from "./runAgentHarness";
 
 type RunPixelFn = <T = unknown>(pixelString: string | string[]) => Promise<T>;
@@ -51,22 +57,58 @@ export const submitAgentMessage =
       return;
     }
 
-    const state = getState();
-    const { projectId, messages } = state.chat;
+    const stateBefore = getState();
+
+    const parsed = parseSlashCommands(trimmedMessage, {
+      effort: stateBefore.chat.effort,
+      thinkingEnabled: stateBefore.chat.thinkingEnabled,
+    });
+
+    if (parsed.effortUpdate) {
+      dispatch(setEffort(parsed.effortUpdate));
+    }
+    if (parsed.thinkingUpdate !== undefined) {
+      const next =
+        parsed.thinkingUpdate === "toggle"
+          ? !stateBefore.chat.thinkingEnabled
+          : parsed.thinkingUpdate;
+      dispatch(setThinkingEnabled(next));
+    }
+
+    for (const line of parsed.feedback) {
+      dispatch(addMessage({ role: "system", content: line }));
+    }
+
+    if (!parsed.shouldSend) {
+      dispatch(setInputMessage(""));
+      return;
+    }
+
+    const outboundMessage = parsed.cleanedMessage;
+
+    const stateAfter = getState();
+    const { projectId, messages, effort, thinkingEnabled } = stateAfter.chat;
     const hasExistingConversationContent =
-      state.transcript.events.length > 0 ||
+      stateAfter.transcript.events.length > 0 ||
       messages.some((chatMessage) => chatMessage.role !== "system");
 
-    dispatch(addMessage({ role: "user", content: trimmedMessage }));
+    dispatch(addMessage({ role: "user", content: outboundMessage }));
+
+    const effortForThisTurn = parsed.effortOneShot ?? effort;
+    const thinkingForThisTurn =
+      parsed.effortOneShot !== undefined ? true : thinkingEnabled;
+
     dispatch(
       runAgentHarness({
-        message: trimmedMessage,
+        message: outboundMessage,
         shouldGenerateRoomName: !hasExistingConversationContent,
         runPixel,
         runPixelAsync,
         getPixelAsyncResult,
         getPixelJobStreaming,
         projectId,
+        effort: effortForThisTurn,
+        thinkingEnabled: thinkingForThisTurn,
       }),
     );
     dispatch(setInputMessage(""));

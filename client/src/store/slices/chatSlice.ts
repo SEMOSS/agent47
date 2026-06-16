@@ -1,6 +1,7 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import { v4 as uuidv4 } from "uuid";
 import type { TranscriptHarness } from "@/types/transcript";
+import type { EffortLevel } from "@/lib/parseSlashCommands";
 import { createProject, createReactProject } from "./createProjectSlice";
 import { runAgentHarness } from "../thunks/runAgentHarness";
 
@@ -51,6 +52,8 @@ export interface ChatState {
   workspaceId: string;
   permissionMode: PermissionMode;
   harnessType: HarnessType;
+  effort: EffortLevel;
+  thinkingEnabled: boolean;
   inputMessage: string;
   messages: ChatMessage[];
   pendingMessageId: string | null;
@@ -68,6 +71,16 @@ const LAST_HARNESS_TYPE_KEY = "agent47:lastHarnessType";
 const LAST_ENGINE_ID_KEY = "agent47:lastEngineId";
 const LAST_ENGINE_DISPLAY_NAME_KEY = "agent47:lastEngineDisplayName";
 const LAST_WORKSPACE_ID_KEY = "agent47:lastWorkspaceId";
+const LAST_EFFORT_KEY = "agent47:lastEffort";
+const LAST_THINKING_KEY = "agent47:lastThinkingEnabled";
+
+const VALID_EFFORT_LEVELS: EffortLevel[] = [
+  "auto",
+  "low",
+  "medium",
+  "high",
+  "max",
+];
 
 const VALID_HARNESS_TYPES: HarnessType[] = [
   "claude_code",
@@ -128,6 +141,16 @@ const loadInitialEngineDisplayName = (): string =>
 const loadInitialWorkspaceId = (): string =>
   readLocalStorage(LAST_WORKSPACE_ID_KEY) ?? "";
 
+const loadInitialEffort = (): EffortLevel => {
+  const stored = readLocalStorage(LAST_EFFORT_KEY);
+  return stored && (VALID_EFFORT_LEVELS as string[]).includes(stored)
+    ? (stored as EffortLevel)
+    : "auto";
+};
+
+const loadInitialThinkingEnabled = (): boolean =>
+  readLocalStorage(LAST_THINKING_KEY) === "true";
+
 const loadInitialRoomId = (): string => {
   const projectId = loadInitialProjectId();
   if (projectId) {
@@ -145,6 +168,8 @@ const initialState: ChatState = {
   workspaceId: loadInitialWorkspaceId(),
   permissionMode: "acceptEdits",
   harnessType: loadInitialHarnessType(),
+  effort: loadInitialEffort(),
+  thinkingEnabled: loadInitialThinkingEnabled(),
   inputMessage: "",
   messages: [],
   pendingMessageId: null,
@@ -217,6 +242,14 @@ const chatSlice = createSlice({
     setHarnessType(state, action: PayloadAction<HarnessType>) {
       state.harnessType = action.payload;
       writeLocalStorage(LAST_HARNESS_TYPE_KEY, action.payload);
+    },
+    setEffort(state, action: PayloadAction<EffortLevel>) {
+      state.effort = action.payload;
+      writeLocalStorage(LAST_EFFORT_KEY, action.payload);
+    },
+    setThinkingEnabled(state, action: PayloadAction<boolean>) {
+      state.thinkingEnabled = action.payload;
+      writeLocalStorage(LAST_THINKING_KEY, action.payload ? "true" : "false");
     },
     setActiveProject(state, action: PayloadAction<string>) {
       if (state.projectId && state.roomId) {
@@ -361,6 +394,8 @@ export const {
   setWorkspaceId,
   setPermissionMode,
   setHarnessType,
+  setEffort,
+  setThinkingEnabled,
   setActiveProject,
   setInputMessage,
   bumpIframeRefresh,

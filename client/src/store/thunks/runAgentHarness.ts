@@ -1,5 +1,9 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { parseTranscriptMessage } from "@/lib/parseTranscriptMessage";
+import {
+  type EffortLevel,
+  effortToThinkingBudget,
+} from "@/lib/parseSlashCommands";
 import type { StreamingResponse } from "@/contexts/AppContext";
 import {
   type ChatState,
@@ -616,6 +620,8 @@ export const runAgentHarness = createAsyncThunk<
     getPixelJobStreaming: GetPixelJobStreamingFn;
     projectId?: string;
     engineId?: string;
+    effort?: EffortLevel;
+    thinkingEnabled?: boolean;
   },
   {
     rejectValue: string;
@@ -637,6 +643,8 @@ export const runAgentHarness = createAsyncThunk<
       getPixelAsyncResult,
       getPixelJobStreaming,
       projectId,
+      effort,
+      thinkingEnabled,
     },
     { rejectWithValue, getState, dispatch },
   ) => {
@@ -676,10 +684,21 @@ export const runAgentHarness = createAsyncThunk<
 
       const safeMessage = sanitizePixelArg(message);
 
-      const paramMap = {
+      const resolvedEffort: EffortLevel = effort ?? chat.effort;
+      const resolvedThinking =
+        thinkingEnabled !== undefined ? thinkingEnabled : chat.thinkingEnabled;
+      const resolvedBudget = resolvedThinking
+        ? effortToThinkingBudget(resolvedEffort)
+        : null;
+
+      const paramMap: Record<string, unknown> = {
         project: targetProjectId,
         permissionMode: chat.permissionMode,
+        thinking: resolvedThinking,
       };
+      if (resolvedBudget !== null) {
+        paramMap.thinking_budget = resolvedBudget;
+      }
 
       // SEMOSS harness drives its own tool loop and benefits from an explicit
       // maxTurns cap. CLI harnesses (claude_code, github_copilot_py) manage their
