@@ -10,6 +10,7 @@ import {
   Sparkles,
   SquarePen,
   Trash2,
+  TriangleAlert,
 } from "lucide-react";
 import {
   type ChangeEvent,
@@ -67,12 +68,15 @@ import { buildIssuesRepairPrompt } from "@/lib/previewIssues";
 import { useAppDispatch, useAppSelector } from "@/store";
 import {
   type ChatMessage,
+  DEFAULT_MAX_TURNS,
   type HarnessType,
   type PermissionMode,
+  sanitizeMaxTurns,
   setEngineDisplayName,
   setEngineId,
   setHarnessType,
   setInputMessage,
+  setMaxTurns,
   setPermissionMode,
   setWorkspaceId,
   startNewRoom,
@@ -142,11 +146,42 @@ const MessageBubble = ({
   time,
   content,
   status,
+  errorDetail,
 }: ChatMessage) => {
   const isUser = role === "user";
   const isSystem = role === "system";
   const isLoading = status === "loading";
   const isStreaming = status === "streaming";
+  const isError = status === "error";
+  const [errorExpanded, setErrorExpanded] = useState(false);
+
+  // Key/value debug rows for a failed run (empties dropped); shown in the
+  // expandable detail panel and copied verbatim.
+  const errorDetailRows = errorDetail
+    ? (
+        [
+          ["status", errorDetail.status],
+          ["error", errorDetail.errorMessage],
+          ["harness", errorDetail.harnessType],
+          ["runId", errorDetail.runId],
+          ["roomId", errorDetail.roomId],
+          ["jobId", errorDetail.jobId],
+        ] as Array<[string, string | undefined]>
+      ).filter((row): row is [string, string] => Boolean(row[1]))
+    : [];
+
+  const copyErrorDetail = async () => {
+    const text = [content, "", ...errorDetailRows.map(([k, v]) => `${k}: ${v}`)]
+      .join("\n")
+      .trim();
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Error details copied");
+    } catch (error) {
+      console.error("Failed to copy error details:", error);
+      toast.error("Failed to copy error details");
+    }
+  };
 
   return (
     <div
@@ -164,8 +199,11 @@ const MessageBubble = ({
           isUser &&
             "bg-gradient-to-r from-slate-700 to-slate-800 dark:from-slate-600 dark:to-slate-700 text-white shadow-md shadow-slate-500/15",
           !isUser &&
+            !isError &&
             "bg-white/90 dark:bg-zinc-800/70 text-foreground border border-slate-200/50 dark:border-white/10 shadow-sm",
-          isSystem && "border-dashed",
+          isSystem && !isError && "border-dashed",
+          isError &&
+            "border border-red-300/70 bg-red-50/80 text-red-700 dark:border-red-500/30 dark:bg-red-950/30 dark:text-red-300",
         )}
       >
         {isLoading ? (
@@ -177,6 +215,49 @@ const MessageBubble = ({
           <div>
             <MarkdownRenderer content={content} />
             <span className="inline-block ml-1 h-3 w-0.5 animate-pulse bg-foreground/60" />
+          </div>
+        ) : isError ? (
+          <div className="flex flex-col gap-1.5 text-xs">
+            <span className="flex items-start gap-2">
+              <TriangleAlert className="h-4 w-4 shrink-0" />
+              <span>{content}</span>
+            </span>
+            {errorDetailRows.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setErrorExpanded((prev) => !prev)}
+                className="flex items-center gap-1 self-start text-[11px] font-medium text-red-700/80 hover:text-red-700 dark:text-red-300/80 dark:hover:text-red-300"
+              >
+                {errorExpanded ? (
+                  <ChevronUp className="h-3 w-3" />
+                ) : (
+                  <ChevronDown className="h-3 w-3" />
+                )}
+                Details
+              </button>
+            ) : null}
+            {errorDetailRows.length > 0 && errorExpanded ? (
+              <div className="relative max-h-[280px] overflow-y-auto rounded-md border border-red-300/50 bg-red-100/40 p-2 pr-7 font-mono text-[11px] leading-relaxed dark:border-red-500/20 dark:bg-red-950/40">
+                <button
+                  type="button"
+                  onClick={copyErrorDetail}
+                  aria-label="Copy error details"
+                  className="absolute right-1 top-1 rounded p-1 text-red-700/70 hover:bg-red-200/50 hover:text-red-700 dark:text-red-300/70 dark:hover:bg-red-900/50"
+                >
+                  <Copy className="h-3 w-3" />
+                </button>
+                {errorDetailRows.map(([key, value]) => (
+                  <div key={key} className="flex gap-2">
+                    <span className="shrink-0 text-red-700/55 dark:text-red-300/55">
+                      {key}
+                    </span>
+                    <span className="whitespace-pre-wrap break-words">
+                      {value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : isSystem ? (
           <span className="text-xs">{content}</span>
@@ -205,6 +286,7 @@ export const ChatInterface = () => {
     workspaceId,
     permissionMode,
     harnessType,
+    maxTurns,
     inputMessage,
     messages,
     pendingMessageId,
@@ -255,6 +337,20 @@ export const ChatInterface = () => {
   const [engineLoading, setEngineLoading] = useState(false);
   const [pendingHarnessType, setPendingHarnessType] =
     useState<HarnessType | null>(null);
+  // Local draft so the field can be cleared/typed freely; committed (and
+  // sanitized) to the store on blur.
+  const [maxTurnsDraft, setMaxTurnsDraft] = useState(String(maxTurns));
+
+  // Keep the draft aligned when the store value changes from elsewhere.
+  useEffect(() => {
+    setMaxTurnsDraft(String(maxTurns));
+  }, [maxTurns]);
+
+  const commitMaxTurns = () => {
+    const next = sanitizeMaxTurns(maxTurnsDraft);
+    dispatch(setMaxTurns(next));
+    setMaxTurnsDraft(String(next));
+  };
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const previousMessageCountRef = useRef(0);
@@ -654,7 +750,10 @@ export const ChatInterface = () => {
     if (!justFinished) return;
 
     const lastMessage = messages[messages.length - 1];
-    if (lastMessage?.status === "error") return;
+    if (lastMessage?.status === "error") {
+      toast.error("The agent didn't finish your request.", { duration: 4000 });
+      return;
+    }
 
     toast.success("Response complete", { duration: 2000 });
   }, [isStreaming, messages]);
@@ -1333,6 +1432,31 @@ export const ChatInterface = () => {
                               config (subdir, hooks, MCPs, system prompt) from
                               WORKSPACE.CONFIG_JSON. Leave blank for legacy
                               behavior.
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="max-turns">Max Turns</Label>
+                            <Input
+                              id="max-turns"
+                              type="number"
+                              min={1}
+                              step={1}
+                              inputMode="numeric"
+                              value={maxTurnsDraft}
+                              onChange={(event) =>
+                                setMaxTurnsDraft(event.target.value)
+                              }
+                              onBlur={commitMaxTurns}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  commitMaxTurns();
+                                  event.currentTarget.blur();
+                                }
+                              }}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Maximum number of agent turns per message.
+                              Defaults to {DEFAULT_MAX_TURNS}.
                             </p>
                           </div>
                         </div>

@@ -6,7 +6,9 @@ import {
 } from "@/lib/parseSlashCommands";
 import type { StreamingResponse } from "@/contexts/AppContext";
 import {
+  type AgentRunFailureDetail,
   type ChatState,
+  type RunErrorPayload,
   updateConversationRoomName,
 } from "../slices/chatSlice";
 import type { MCPState } from "../slices/mcpSlice";
@@ -609,6 +611,75 @@ const normalizeSemossStreamingChunk = ({
   };
 };
 
+// RunAgent returns the durable run record as a structured MAP output:
+// { status, finalText, errorMessage, runId, roomId, harnessType, jobId, … }
+// (the AgentRunStore view; AgentRunStatus = SUBMITTED|RUNNING|INPUT_REQUIRED|
+// COMPLETED|FAILED|CANCELLED). The backend captures a harness failure AS
+// status=FAILED/CANCELLED + errorMessage on a completed job — it does not throw
+// — so we detect failures from this record, not from errors[].
+// This is the full run record (success + failure); it reuses the shared
+// AgentRunFailureDetail field shape (the failure-relevant subset) plus finalText.
+type RunAgentOutput = AgentRunFailureDetail & { finalText?: string };
+
+const FAILED_RUN_STATUSES = new Set(["FAILED", "CANCELLED"]);
+
+// Pick the first result whose output is the run record (carries a string
+// `status`). Legacy backends returned a bare string output instead — then this
+// is null and the caller falls back to legacy handling.
+const findRunOutput = (
+  results: { output: unknown }[],
+): RunAgentOutput | null => {
+  for (const result of results) {
+    const output = result?.output;
+    if (
+      output &&
+      typeof output === "object" &&
+      typeof (output as RunAgentOutput).status === "string"
+    ) {
+      return output as RunAgentOutput;
+    }
+  }
+  return null;
+};
+
+const isFailedRunStatus = (status: string | undefined): boolean =>
+  !!status && FAILED_RUN_STATUSES.has(status.trim().toUpperCase());
+
+// User-facing headline for a failed run. Max-turns (the common, user-fixable
+// case) gets actionable guidance; cancellation and anything else surface the
+// backend reason so the cause isn't hidden.
+const buildRunFailureMessage = (
+  output: RunAgentOutput,
+  maxTurns: number,
+): string => {
+  const detail = output.errorMessage?.trim() ?? "";
+  if (/max turns/i.test(detail)) {
+    return `The agent stopped after reaching its limit of ${maxTurns} turns before completing your request. Send "continue" to keep going, or raise the limit in Settings → Max Turns.`;
+  }
+  if (output.status?.trim().toUpperCase() === "CANCELLED") {
+    return detail
+      ? `The agent run was cancelled: ${detail}`
+      : "The agent run was cancelled.";
+  }
+  return detail
+    ? `The agent didn't finish your request: ${detail}`
+    : "The agent didn't finish your request. Please try again.";
+};
+
+// Structured detail attached to the error bubble for debugging.
+const buildRunFailureDetail = (
+  output: RunAgentOutput,
+  chat: ChatState,
+  jobId: string,
+): AgentRunFailureDetail => ({
+  status: output.status,
+  errorMessage: output.errorMessage,
+  harnessType: output.harnessType ?? chat.harnessType,
+  runId: output.runId,
+  roomId: output.roomId ?? chat.roomId,
+  jobId: output.jobId ?? jobId,
+});
+
 export const runAgentHarness = createAsyncThunk<
   { response: string },
   {
@@ -624,7 +695,7 @@ export const runAgentHarness = createAsyncThunk<
     thinkingEnabled?: boolean;
   },
   {
-    rejectValue: string;
+    rejectValue: RunErrorPayload;
     state: {
       chat: ChatState;
       mcp: MCPState;
@@ -700,10 +771,14 @@ export const runAgentHarness = createAsyncThunk<
         paramMap.thinking_budget = resolvedBudget;
       }
 
-      // SEMOSS harness drives its own tool loop and benefits from an explicit
-      // maxTurns cap. CLI harnesses (claude_code, github_copilot_py) manage their
-      // own loops and ignore the cap.
-      const maxTurnsPart = chat.harnessType === "semoss" ? ", maxTurns=30" : "";
+      // maxTurns is an OPTIONAL key on the RunAgent reactor: it's parsed for
+      // every harness but only the SEMOSS harness consumes it (to bound its
+      // tool loop and throw AgentMaxTurnsException at the cap). The CLI
+      // harnesses (claude_code, github_copilot_py) never read it — they run
+      // their own loops — so forwarding it unconditionally is safe (including
+      // it is equivalent to omitting it for them). User-configurable in
+      // Settings; falls back to DEFAULT_MAX_TURNS.
+      const maxTurnsPart = `, maxTurns=${chat.maxTurns}`;
 
       // When a workspace id is configured, pass it as a named arg on RunAgent
       // so the backend AgentRunner overlays it onto the room for the duration
@@ -776,7 +851,13 @@ export const runAgentHarness = createAsyncThunk<
             isPolling = false;
 
             if (response.status === "Error") {
-              throw new Error("Streaming job encountered an error");
+              // A terminal ERROR job status is a genuine run failure — NOT the
+              // maxTurns cap, which completes the job and is surfaced from the
+              // run record below (status FAILED/CANCELLED). We have no detail
+              // here, so stay generic.
+              throw new Error(
+                "The agent run failed before completing your request. Please try again.",
+              );
             }
           }
 
@@ -793,14 +874,34 @@ export const runAgentHarness = createAsyncThunk<
 
       const result = await getPixelAsyncResult<[unknown, string]>(jobId);
 
+      // A genuine pixel-level error (rare) surfaces here; reject with its text.
       if (result.errors.length > 0) {
-        throw new Error(result.errors.join(""));
+        const detail = result.errors.join("\n").trim();
+        return rejectWithValue({
+          message: detail
+            ? `The agent run failed: ${detail}`
+            : "The agent run failed. Please try again.",
+        });
       }
 
-      const finalResponse =
-        result.results.length > 1
-          ? (result.results[1].output as string)
-          : (result.results[0].output as string);
+      // RunAgent returns the durable run record as a structured MAP. A failed
+      // run completes the job (no throw) with status=FAILED/CANCELLED, so detect
+      // it here and surface the captured reason + structured debug detail.
+      const runOutput = findRunOutput(result.results);
+      if (runOutput && isFailedRunStatus(runOutput.status)) {
+        return rejectWithValue({
+          message: buildRunFailureMessage(runOutput, chat.maxTurns),
+          detail: buildRunFailureDetail(runOutput, chat, jobId),
+        });
+      }
+
+      // Success: the agent's answer is the run record's finalText. Legacy
+      // backends returned a bare string output instead — fall back to that.
+      const finalResponse = runOutput
+        ? (runOutput.finalText ?? "")
+        : result.results.length > 1
+          ? (result.results[1]?.output as string)
+          : (result.results[0]?.output as string);
 
       if (
         chat.harnessType === "semoss" &&
@@ -905,7 +1006,12 @@ export const runAgentHarness = createAsyncThunk<
       return { response: finalResponse ?? "" };
     } catch (error) {
       console.error("runAgentHarness streaming error:", error);
-      return rejectWithValue("Failed to run the selected agent.");
+      return rejectWithValue({
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to run the selected agent.",
+      });
     }
   },
 );

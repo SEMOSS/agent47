@@ -1,4 +1,5 @@
 import type { AppDispatch, RootState } from "@/store";
+import type { StreamingResponse } from "@/contexts/AppContext";
 import { parseSlashCommands } from "@/lib/parseSlashCommands";
 import {
   addMessage,
@@ -25,15 +26,7 @@ type GetPixelAsyncResultFn = <O extends unknown[] | []>(
     timeToRun: number;
   }[];
 }>;
-type GetPixelJobStreamingFn = (
-  jobId: string,
-) => Promise<{
-  message: Array<{
-    stream_type: "content" | "thinking" | "tool";
-    data: Record<string, unknown>;
-  }>;
-  status: string;
-}>;
+type GetPixelJobStreamingFn = (jobId: string) => Promise<StreamingResponse>;
 
 type SubmitAgentMessageArgs = {
   message: string;
