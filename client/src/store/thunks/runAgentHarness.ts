@@ -758,7 +758,7 @@ export const runAgentHarness = createAsyncThunk<
       const resolvedEffort: EffortLevel = effort ?? chat.effort;
       const resolvedThinking =
         thinkingEnabled !== undefined ? thinkingEnabled : chat.thinkingEnabled;
-      const resolvedBudget = resolvedThinking
+      const resolvedEffortParam = resolvedThinking
         ? effortToThinkingBudget(resolvedEffort)
         : null;
 
@@ -767,8 +767,8 @@ export const runAgentHarness = createAsyncThunk<
         permissionMode: chat.permissionMode,
         thinking: resolvedThinking,
       };
-      if (resolvedBudget !== null) {
-        paramMap.thinking_budget = resolvedBudget;
+      if (resolvedEffortParam !== null) {
+        paramMap.effort = resolvedEffortParam;
       }
 
       // maxTurns is an OPTIONAL key on the RunAgent reactor: it's parsed for
