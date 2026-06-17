@@ -185,7 +185,7 @@ const loadInitialEffort = (): EffortLevel => {
 };
 
 const loadInitialThinkingEnabled = (): boolean =>
-  readLocalStorage(LAST_THINKING_KEY) === "true";
+  readLocalStorage(LAST_THINKING_KEY) !== "false";
 
 // Coerce arbitrary input to a positive integer turn cap, falling back to the
 // default when the value isn't a usable number.
