@@ -16,6 +16,7 @@ import {
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
+  type SyntheticEvent,
   type UIEvent,
   useCallback,
   useEffect,
@@ -65,6 +66,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAppContext } from "@/contexts/AppContext";
 import { cn } from "@/lib/utils";
 import { buildIssuesRepairPrompt } from "@/lib/previewIssues";
+import {
+  type EffortLevel,
+  SLASH_COMMANDS,
+  type SlashCommandSpec,
+} from "@/lib/parseSlashCommands";
 import { useAppDispatch, useAppSelector } from "@/store";
 import {
   type ChatMessage,
@@ -72,12 +78,14 @@ import {
   type HarnessType,
   type PermissionMode,
   sanitizeMaxTurns,
+  setEffort,
   setEngineDisplayName,
   setEngineId,
   setHarnessType,
   setInputMessage,
   setMaxTurns,
   setPermissionMode,
+  setThinkingEnabled,
   setWorkspaceId,
   startNewRoom,
 } from "@/store/slices/chatSlice";
@@ -139,6 +147,75 @@ const getHarnessLabel = (harnessType: HarnessType) =>
 const isPermissionMode = (value: string): value is PermissionMode =>
   PERMISSION_MODE_OPTIONS.some((option) => option.value === value);
 const MAX_CHAT_INPUT_HEIGHT_PX = 240;
+
+type SlashMenuContext = {
+  replaceStart: number;
+  replaceEnd: number;
+  mode: "command" | "arg";
+  argQuery: string;
+  commands: SlashCommandSpec[];
+  signature: string;
+};
+
+const computeSlashMenuContext = (
+  value: string,
+  cursor: number,
+): SlashMenuContext | null => {
+  const uptoCursor = value.slice(0, cursor);
+  const lineStart = uptoCursor.lastIndexOf("\n") + 1;
+  const line = uptoCursor.slice(lineStart);
+  if (!line.startsWith("/")) {
+    return null;
+  }
+
+  const rest = line.slice(1);
+  const spaceIndex = rest.indexOf(" ");
+
+  if (spaceIndex === -1) {
+    const query = rest.toLowerCase();
+    const commands = SLASH_COMMANDS.filter((command) =>
+      command.name.slice(1).toLowerCase().startsWith(query),
+    );
+    if (commands.length === 0) {
+      return null;
+    }
+    return {
+      replaceStart: lineStart,
+      replaceEnd: cursor,
+      mode: "command",
+      argQuery: "",
+      commands,
+      signature: `command:${query}`,
+    };
+  }
+
+  const name = `/${rest.slice(0, spaceIndex)}`.toLowerCase();
+  const argQuery = rest.slice(spaceIndex + 1);
+  if (argQuery.includes(" ")) {
+    return null;
+  }
+  const command = SLASH_COMMANDS.find(
+    (entry) => entry.name.toLowerCase() === name,
+  );
+  if (!command) {
+    return null;
+  }
+  return {
+    replaceStart: lineStart,
+    replaceEnd: cursor,
+    mode: "arg",
+    argQuery,
+    commands: [command],
+    signature: `arg:${name}:${argQuery.toLowerCase()}`,
+  };
+};
+
+const currentSlashValue = (
+  command: SlashCommandSpec,
+  effort: EffortLevel,
+  thinkingEnabled: boolean,
+): string =>
+  command.name === "/effort" ? effort : thinkingEnabled ? "on" : "off";
 
 const MessageBubble = ({
   author,
@@ -290,6 +367,8 @@ export const ChatInterface = () => {
     inputMessage,
     messages,
     pendingMessageId,
+    effort,
+    thinkingEnabled,
   } = useAppSelector((state) => state.chat);
   const {
     items: availableMcps,
@@ -351,6 +430,10 @@ export const ChatInterface = () => {
     dispatch(setMaxTurns(next));
     setMaxTurnsDraft(String(next));
   };
+  const [slashCursor, setSlashCursor] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const [activeCommandIndex, setActiveCommandIndex] = useState(0);
+  const [activeOptionIndex, setActiveOptionIndex] = useState(0);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const previousMessageCountRef = useRef(0);
@@ -358,10 +441,63 @@ export const ChatInterface = () => {
   const wasStreamingRef = useRef(false);
   const fetchedSkillsProjectIdRef = useRef<string | null>(null);
   const loadedSelectedEnginesProjectIdRef = useRef<string | null>(null);
+  const slashSignatureRef = useRef<string | null>(null);
   const trimmedMessage = inputMessage.trim();
   const isStreaming = pendingMessageId !== null;
   const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
   const activeHarnessLabel = getHarnessLabel(harnessType);
+
+  const slashMenu = useMemo(
+    () =>
+      slashDismissed
+        ? null
+        : computeSlashMenuContext(inputMessage, slashCursor),
+    [inputMessage, slashCursor, slashDismissed],
+  );
+  const slashCommandIndex = slashMenu
+    ? Math.min(activeCommandIndex, slashMenu.commands.length - 1)
+    : 0;
+  const activeSlashCommand = slashMenu
+    ? slashMenu.commands[slashCommandIndex]
+    : null;
+  const activeSlashOptions = useMemo(() => {
+    if (!slashMenu || !activeSlashCommand) {
+      return [];
+    }
+    if (slashMenu.mode === "arg" && slashMenu.argQuery) {
+      const query = slashMenu.argQuery.toLowerCase();
+      const filtered = activeSlashCommand.options.filter(
+        (option) =>
+          option.value.toLowerCase().startsWith(query) ||
+          option.label.toLowerCase().startsWith(query),
+      );
+      return filtered.length > 0 ? filtered : activeSlashCommand.options;
+    }
+    return activeSlashCommand.options;
+  }, [slashMenu, activeSlashCommand]);
+  const slashOptionIndex =
+    activeSlashOptions.length === 0
+      ? 0
+      : Math.min(Math.max(activeOptionIndex, 0), activeSlashOptions.length - 1);
+
+  useEffect(() => {
+    if (!slashMenu) {
+      slashSignatureRef.current = null;
+      return;
+    }
+    if (slashSignatureRef.current === slashMenu.signature) {
+      return;
+    }
+    slashSignatureRef.current = slashMenu.signature;
+    setActiveCommandIndex(0);
+    const command = slashMenu.commands[0];
+    const current = currentSlashValue(command, effort, thinkingEnabled);
+    const index = command.options.findIndex(
+      (option) => option.value === current,
+    );
+    setActiveOptionIndex(index >= 0 ? index : 0);
+  }, [slashMenu, effort, thinkingEnabled]);
+
   const selectedMcpIds = useMemo(
     () => new Set(selectedMcps.map((mcp) => mcp.id)),
     [selectedMcps],
@@ -495,22 +631,134 @@ export const ChatInterface = () => {
   const handleMessageChange = useCallback(
     (event: ChangeEvent<HTMLTextAreaElement>) => {
       dispatch(setInputMessage(event.target.value));
+      setSlashCursor(event.target.selectionStart ?? event.target.value.length);
+      setSlashDismissed(false);
     },
     [dispatch],
   );
 
-  const handleMessageKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.nativeEvent.isComposing) {
+  const handleInputSelect = useCallback(
+    (event: SyntheticEvent<HTMLTextAreaElement>) => {
+      setSlashCursor(event.currentTarget.selectionStart ?? 0);
+    },
+    [],
+  );
+
+  const applySlashOption = (command: SlashCommandSpec, value: string) => {
+    if (command.name === "/effort") {
+      dispatch(setEffort(value as EffortLevel));
+      toast.success(`Effort set to ${value}.`);
+    } else if (command.name === "/thinking") {
+      dispatch(setThinkingEnabled(value === "on"));
+      toast.success(`Thinking ${value === "on" ? "enabled" : "disabled"}.`);
+    }
+
+    if (slashMenu) {
+      const before = inputMessage.slice(0, slashMenu.replaceStart);
+      const after = inputMessage.slice(slashMenu.replaceEnd);
+      const nextValue = before + after;
+      dispatch(setInputMessage(nextValue));
+      const caret = before.length;
+      setSlashCursor(caret);
+      requestAnimationFrame(() => {
+        const textarea = chatInputRef.current;
+        if (textarea) {
+          textarea.focus();
+          textarea.setSelectionRange(caret, caret);
+        }
+      });
+    }
+
+    slashSignatureRef.current = null;
+    setSlashDismissed(false);
+  };
+
+  const selectSlashCommand = (index: number) => {
+    setActiveCommandIndex(index);
+    const command = slashMenu?.commands[index];
+    if (!command) {
+      return;
+    }
+    const current = currentSlashValue(command, effort, thinkingEnabled);
+    const optionIndex = command.options.findIndex(
+      (option) => option.value === current,
+    );
+    setActiveOptionIndex(optionIndex >= 0 ? optionIndex : 0);
+  };
+
+  const handleMessageKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
+
+    if (slashMenu && activeSlashCommand) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        if (activeSlashOptions.length > 0) {
+          setActiveOptionIndex(
+            (slashOptionIndex + 1) % activeSlashOptions.length,
+          );
+        }
         return;
       }
-      if (event.key === "Enter" && !event.shiftKey) {
+      if (event.key === "ArrowUp") {
         event.preventDefault();
-        handleSendMessage();
+        if (activeSlashOptions.length > 0) {
+          setActiveOptionIndex(
+            (slashOptionIndex - 1 + activeSlashOptions.length) %
+              activeSlashOptions.length,
+          );
+        }
+        return;
       }
-    },
-    [handleSendMessage],
-  );
+      if (
+        slashMenu.commands.length > 1 &&
+        (event.key === "ArrowRight" || event.key === "ArrowLeft")
+      ) {
+        event.preventDefault();
+        const delta = event.key === "ArrowRight" ? 1 : -1;
+        selectSlashCommand(
+          (slashCommandIndex + delta + slashMenu.commands.length) %
+            slashMenu.commands.length,
+        );
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        if (slashMenu.commands.length > 1) {
+          selectSlashCommand(
+            (slashCommandIndex + 1) % slashMenu.commands.length,
+          );
+        } else if (activeSlashOptions.length > 0) {
+          applySlashOption(
+            activeSlashCommand,
+            activeSlashOptions[slashOptionIndex].value,
+          );
+        }
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (activeSlashOptions.length > 0) {
+          applySlashOption(
+            activeSlashCommand,
+            activeSlashOptions[slashOptionIndex].value,
+          );
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+    }
+
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      handleSendMessage();
+    }
+  };
 
   const handleToggleMcp = useCallback(
     (mcp: MCPItem, nextChecked: boolean) => {
@@ -1186,15 +1434,102 @@ export const ChatInterface = () => {
 
             <footer className="border-t border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-white/60 to-slate-50/40 px-4 py-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <Textarea
-                  placeholder="Type a message…"
-                  rows={2}
-                  ref={chatInputRef}
-                  value={inputMessage}
-                  onChange={handleMessageChange}
-                  onKeyDown={handleMessageKeyDown}
-                  className="min-h-[3.25rem] max-h-60 flex-1 resize-none border-slate-200/60 bg-white/90 dark:bg-zinc-800/70 focus-visible:ring-slate-400/30"
-                />
+                <div className="relative flex-1">
+                  {slashMenu && activeSlashCommand ? (
+                    <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-md overflow-hidden rounded-xl border border-slate-200/70 bg-white/95 shadow-xl shadow-slate-400/20 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/95">
+                      <div className="flex max-h-72">
+                        <div className="w-32 shrink-0 space-y-0.5 overflow-y-auto border-r border-slate-200/60 bg-slate-50/70 p-1.5 dark:border-white/10 dark:bg-zinc-800/40">
+                          {slashMenu.commands.map((command, index) => {
+                            const isActive = index === slashCommandIndex;
+                            return (
+                              <button
+                                key={command.name}
+                                type="button"
+                                onMouseEnter={() => selectSlashCommand(index)}
+                                onClick={() => selectSlashCommand(index)}
+                                className={cn(
+                                  "flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left transition-colors",
+                                  isActive
+                                    ? "bg-white shadow-sm dark:bg-zinc-700/70"
+                                    : "hover:bg-white/70 dark:hover:bg-zinc-700/40",
+                                )}
+                              >
+                                <span className="text-sm font-medium">
+                                  {command.label}
+                                </span>
+                                <span className="font-mono text-[10px] text-muted-foreground">
+                                  {command.name}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="flex-1 space-y-0.5 overflow-y-auto p-1.5">
+                          <p className="px-2 pb-1 pt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                            {activeSlashCommand.description}
+                          </p>
+                          {activeSlashOptions.map((option, index) => {
+                            const isActive = index === slashOptionIndex;
+                            const isCurrent =
+                              currentSlashValue(
+                                activeSlashCommand,
+                                effort,
+                                thinkingEnabled,
+                              ) === option.value;
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onMouseEnter={() => setActiveOptionIndex(index)}
+                                onClick={() =>
+                                  applySlashOption(activeSlashCommand, option.value)
+                                }
+                                className={cn(
+                                  "flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-left transition-colors",
+                                  isActive
+                                    ? "bg-emerald-500/10 text-foreground"
+                                    : "hover:bg-accent/50",
+                                )}
+                              >
+                                <span className="flex min-w-0 flex-col">
+                                  <span className="text-sm font-medium">
+                                    {option.label}
+                                  </span>
+                                  <span className="truncate text-[11px] text-muted-foreground">
+                                    {option.description}
+                                  </span>
+                                </span>
+                                {isCurrent ? (
+                                  <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                    current
+                                  </span>
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 border-t border-slate-200/60 bg-slate-50/50 px-3 py-1.5 text-[10px] text-muted-foreground dark:border-white/10 dark:bg-zinc-800/30">
+                        <span>↑↓ options</span>
+                        {slashMenu.commands.length > 1 ? (
+                          <span>←→ switch</span>
+                        ) : null}
+                        <span>↵ apply</span>
+                        <span>esc dismiss</span>
+                      </div>
+                    </div>
+                  ) : null}
+                  <Textarea
+                    placeholder="Type a message…  (/ for commands)"
+                    rows={2}
+                    ref={chatInputRef}
+                    value={inputMessage}
+                    onChange={handleMessageChange}
+                    onKeyDown={handleMessageKeyDown}
+                    onSelect={handleInputSelect}
+                    className="min-h-[3.25rem] max-h-60 w-full resize-none border-slate-200/60 bg-white/90 dark:bg-zinc-800/70 focus-visible:ring-slate-400/30"
+                  />
+                </div>
                 <Button
                   disabled={isSendDisabled}
                   onClick={handleSendMessage}

@@ -137,6 +137,43 @@ export const parseSlashCommands = (
   };
 };
 
+export type SlashOption = {
+  value: string;
+  label: string;
+  description: string;
+};
+
+export type SlashCommandSpec = {
+  name: string;
+  label: string;
+  description: string;
+  options: SlashOption[];
+};
+
+export const SLASH_COMMANDS: SlashCommandSpec[] = [
+  {
+    name: "/effort",
+    label: "Effort",
+    description: "Reasoning depth the model spends per turn",
+    options: [
+      { value: "auto", label: "Auto", description: "Let the model decide" },
+      { value: "low", label: "Low", description: "Fast, shallow reasoning" },
+      { value: "medium", label: "Medium", description: "Balanced reasoning" },
+      { value: "high", label: "High", description: "Deeper reasoning" },
+      { value: "max", label: "Max", description: "Maximum reasoning budget" },
+    ],
+  },
+  {
+    name: "/thinking",
+    label: "Thinking",
+    description: "Whether the model streams its thinking",
+    options: [
+      { value: "on", label: "On", description: "Show thinking blocks" },
+      { value: "off", label: "Off", description: "Hide thinking" },
+    ],
+  },
+];
+
 export const effortToThinkingBudget = (level: EffortLevel): string | null => {
   switch (level) {
     case "auto":
