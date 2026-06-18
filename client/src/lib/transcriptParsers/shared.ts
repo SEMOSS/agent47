@@ -180,6 +180,9 @@ const looksLikeEvent = (msg: Record<string, unknown>): boolean => {
     if ("durationMs" in msg) return true;
     if ("promptId" in msg) return true;
     if ("text" in msg && typeof msg.text === "string") return true;
+    if (Array.isArray(msg.thinking) && (msg.thinking as unknown[]).length > 0) {
+        return true;
+    }
     if ("messageId" in msg && typeof msg.messageId === "string") return true;
     if ("toolCallId" in msg && typeof msg.toolCallId === "string") return true;
     if (Array.isArray(msg.texts) && (msg.texts as unknown[]).length > 0) {
@@ -395,8 +398,10 @@ export const parseAggregateAssistantEvent = (
     const hasTexts = Array.isArray(msg.texts) && msg.texts.length > 0;
     const hasInvocations =
         Array.isArray(msg.toolInvocations) && msg.toolInvocations.length > 0;
+    const hasThinking =
+        Array.isArray(msg.thinking) && msg.thinking.length > 0;
 
-    if (!hasTexts && !hasInvocations) {
+    if (!hasTexts && !hasInvocations && !hasThinking) {
         return [];
     }
 
@@ -408,6 +413,36 @@ export const parseAggregateAssistantEvent = (
     const parentToolUseId = readString(
         msg.parentToolUseId ?? msg.parentToolCallId,
     );
+
+    if (hasThinking) {
+        for (const [index, item] of (msg.thinking as unknown[]).entries()) {
+            const thinkingEvent = asRecord(item);
+            if (!thinkingEvent) {
+                continue;
+            }
+
+            const thinkingText = readString(thinkingEvent.thinking);
+            if (!thinkingText) {
+                continue;
+            }
+
+            events.push({
+                kind: "assistant-text",
+                eventId: parentEventId
+                    ? `${parentEventId}:thinking:${index}`
+                    : undefined,
+                text: thinkingText,
+                display: "intent",
+                model: readString(thinkingEvent.model ?? parentModel),
+                isPartial: false,
+                parentToolUseId: parentToolUseId,
+                timestamp: String(
+                    thinkingEvent.timestamp ?? parentTimestamp ?? "",
+                ),
+                harnessType,
+            });
+        }
+    }
 
     if (hasTexts) {
         for (const [index, item] of (msg.texts as unknown[]).entries()) {
