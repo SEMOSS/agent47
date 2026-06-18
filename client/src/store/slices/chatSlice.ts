@@ -1,6 +1,7 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import { v4 as uuidv4 } from "uuid";
 import type { TranscriptHarness } from "@/types/transcript";
+import type { EffortLevel } from "@/lib/parseSlashCommands";
 import { createProject, createReactProject } from "./createProjectSlice";
 import { runAgentHarness } from "../thunks/runAgentHarness";
 
@@ -73,6 +74,8 @@ export interface ChatState {
   workspaceId: string;
   permissionMode: PermissionMode;
   harnessType: HarnessType;
+  effort: EffortLevel;
+  thinkingEnabled: boolean;
   /**
    * Maximum number of agent turns for a single {@code RunAgent} call. Passed
    * through as the {@code maxTurns} arg on the pixel. Defaults to
@@ -96,7 +99,17 @@ const LAST_HARNESS_TYPE_KEY = "agent47:lastHarnessType";
 const LAST_ENGINE_ID_KEY = "agent47:lastEngineId";
 const LAST_ENGINE_DISPLAY_NAME_KEY = "agent47:lastEngineDisplayName";
 const LAST_WORKSPACE_ID_KEY = "agent47:lastWorkspaceId";
+const LAST_EFFORT_KEY = "agent47:lastEffort";
+const LAST_THINKING_KEY = "agent47:lastThinkingEnabled";
 const LAST_MAX_TURNS_KEY = "agent47:lastMaxTurns";
+
+const VALID_EFFORT_LEVELS: EffortLevel[] = [
+  "auto",
+  "low",
+  "medium",
+  "high",
+  "max",
+];
 
 /**
  * Default per-run agent turn cap; used when none is stored or the value is
@@ -164,6 +177,16 @@ const loadInitialEngineDisplayName = (): string =>
 const loadInitialWorkspaceId = (): string =>
   readLocalStorage(LAST_WORKSPACE_ID_KEY) ?? "";
 
+const loadInitialEffort = (): EffortLevel => {
+  const stored = readLocalStorage(LAST_EFFORT_KEY);
+  return stored && (VALID_EFFORT_LEVELS as string[]).includes(stored)
+    ? (stored as EffortLevel)
+    : "auto";
+};
+
+const loadInitialThinkingEnabled = (): boolean =>
+  readLocalStorage(LAST_THINKING_KEY) !== "false";
+
 // Coerce arbitrary input to a positive integer turn cap, falling back to the
 // default when the value isn't a usable number.
 export const sanitizeMaxTurns = (value: unknown): number => {
@@ -193,6 +216,8 @@ const initialState: ChatState = {
   workspaceId: loadInitialWorkspaceId(),
   permissionMode: "acceptEdits",
   harnessType: loadInitialHarnessType(),
+  effort: loadInitialEffort(),
+  thinkingEnabled: loadInitialThinkingEnabled(),
   maxTurns: loadInitialMaxTurns(),
   inputMessage: "",
   messages: [],
@@ -283,6 +308,14 @@ const chatSlice = createSlice({
     setHarnessType(state, action: PayloadAction<HarnessType>) {
       state.harnessType = action.payload;
       writeLocalStorage(LAST_HARNESS_TYPE_KEY, action.payload);
+    },
+    setEffort(state, action: PayloadAction<EffortLevel>) {
+      state.effort = action.payload;
+      writeLocalStorage(LAST_EFFORT_KEY, action.payload);
+    },
+    setThinkingEnabled(state, action: PayloadAction<boolean>) {
+      state.thinkingEnabled = action.payload;
+      writeLocalStorage(LAST_THINKING_KEY, action.payload ? "true" : "false");
     },
     setMaxTurns(state, action: PayloadAction<number>) {
       const next = sanitizeMaxTurns(action.payload);
@@ -430,6 +463,8 @@ export const {
   setWorkspaceId,
   setPermissionMode,
   setHarnessType,
+  setEffort,
+  setThinkingEnabled,
   setMaxTurns,
   setActiveProject,
   setInputMessage,

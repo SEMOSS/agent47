@@ -1,5 +1,9 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { parseTranscriptMessage } from "@/lib/parseTranscriptMessage";
+import {
+  type EffortLevel,
+  effortToThinkingBudget,
+} from "@/lib/parseSlashCommands";
 import type { StreamingResponse } from "@/contexts/AppContext";
 import {
   type AgentRunFailureDetail,
@@ -687,6 +691,8 @@ export const runAgentHarness = createAsyncThunk<
     getPixelJobStreaming: GetPixelJobStreamingFn;
     projectId?: string;
     engineId?: string;
+    effort?: EffortLevel;
+    thinkingEnabled?: boolean;
   },
   {
     rejectValue: RunErrorPayload;
@@ -708,6 +714,8 @@ export const runAgentHarness = createAsyncThunk<
       getPixelAsyncResult,
       getPixelJobStreaming,
       projectId,
+      effort,
+      thinkingEnabled,
     },
     { rejectWithValue, getState, dispatch },
   ) => {
@@ -747,11 +755,21 @@ export const runAgentHarness = createAsyncThunk<
 
       const safeMessage = sanitizePixelArg(message);
 
-      const paramMap = {
+      const resolvedEffort: EffortLevel = effort ?? chat.effort;
+      const resolvedThinking =
+        thinkingEnabled !== undefined ? thinkingEnabled : chat.thinkingEnabled;
+      const resolvedEffortParam = resolvedThinking
+        ? effortToThinkingBudget(resolvedEffort)
+        : null;
+
+      const paramMap: Record<string, unknown> = {
         project: targetProjectId,
         permissionMode: chat.permissionMode,
-        thinking: true,
+        thinking: resolvedThinking,
       };
+      if (resolvedEffortParam !== null) {
+        paramMap.effort = resolvedEffortParam;
+      }
 
       // maxTurns is an OPTIONAL key on the RunAgent reactor: it's parsed for
       // every harness but only the SEMOSS harness consumes it (to bound its
