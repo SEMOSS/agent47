@@ -23,6 +23,32 @@ export const claudePixelJobStreamFixture: StreamingMessage[] = [
     },
 ];
 
+// Extended-thinking deltas reuse the same envelope as content, distinguished
+// only by `stream_type: "thinking"`. The parser tags the resulting assistant
+// text with display "intent" so it renders as a reasoning block.
+export const claudeThinkingPixelJobStreamFixture: StreamingMessage[] = [
+    {
+        stream_type: "thinking",
+        data: {
+            event: "assistant",
+            uuid: "1f0d9c8b-7a32-4d61-9e44-2b5c7f0a1e93",
+            sessionId: "85432046-1ce0-4b8a-805e-e53c5a2a1b13",
+            data: {
+                model: "aa876e7e-e78e-404d-b7db-1a44236bc2a5",
+                texts: [
+                    {
+                        eventId:
+                            "1f0d9c8b-7a32-4d61-9e44-2b5c7f0a1e93",
+                        text: "I should list the directory before editing anything.",
+                        isPartial: false,
+                        timestamp: "2026-04-22T17:27:49.500000+00:00",
+                    },
+                ],
+            },
+        },
+    },
+];
+
 export const githubCopilotPixelJobStreamFixture: StreamingMessage[] = [
     {
         stream_type: "content",
