@@ -23,20 +23,7 @@ import {
   saveSelectedEngines,
   setEngineSearch,
 } from "@/store/slices/enginesSlice";
-import { querySkills } from "@/store/slices/skillsSlice";
 import { getEngineIcon } from "./engineIcon";
-
-const SKILLS_REFRESH_DEBOUNCE_MS = 500;
-let skillsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-const debounceSkillsRefresh = (run: () => void) => {
-  if (skillsRefreshTimer !== null) {
-    clearTimeout(skillsRefreshTimer);
-  }
-  skillsRefreshTimer = setTimeout(() => {
-    skillsRefreshTimer = null;
-    run();
-  }, SKILLS_REFRESH_DEBOUNCE_MS);
-};
 
 interface EngineSelectionDialogProps {
   category: EngineCategory;
@@ -81,16 +68,7 @@ export function EngineSelectionDialog({
             projectId,
             runPixel,
           }),
-        )
-          .unwrap()
-          .then(() => {
-            debounceSkillsRefresh(() => {
-              void dispatch(querySkills({ projectId, runPixel }));
-            });
-          })
-          .catch(() => {
-            // save failure already surfaces a toast via runPixel; skip refresh
-          });
+        );
       }
       dispatch(resetBrowse(category));
     }

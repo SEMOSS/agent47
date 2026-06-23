@@ -4,12 +4,10 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
-  Plus,
   Search,
   Settings,
   Sparkles,
   SquarePen,
-  Trash2,
   TriangleAlert,
 } from "lucide-react";
 import {
@@ -103,23 +101,11 @@ import {
   selectIssues,
   selectUnseenIssuesCount,
 } from "@/store/slices/issuesSlice";
-import {
-  createSkill,
-  deleteSkill,
-  querySkills,
-  updateSkill,
-} from "@/store/slices/skillsSlice";
+import { querySkills } from "@/store/slices/skillsSlice";
 import { loadProjectEngineDependencies } from "@/store/slices/enginesSlice";
 import { clearGitState, fetchCommitHistory } from "@/store/slices/gitSlice";
 import { submitAgentMessage } from "@/store/thunks/submitAgentMessage";
 import { getTranscriptEventStableKey } from "@/types/transcript";
-
-type SkillTab = {
-  id: string;
-  label: string;
-  skillName: string;
-  content: string;
-};
 
 const PERMISSION_MODE_OPTIONS: Array<{
   value: PermissionMode;
@@ -379,7 +365,7 @@ export const ChatInterface = () => {
     hasMore: mcpHasMore,
     isLoading: isLoadingMcps,
   } = useAppSelector((state) => state.mcp);
-  const { skills, claudeMd } = useAppSelector((state) => state.skills);
+  const { skills } = useAppSelector((state) => state.skills);
   const transcriptEvents = useAppSelector((state) => state.transcript.events);
   const issueRecords = useAppSelector(selectIssues);
   const unseenIssuesCount = useAppSelector(selectUnseenIssuesCount);
@@ -393,21 +379,6 @@ export const ChatInterface = () => {
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isLoadingSkills, setIsLoadingSkills] = useState(false);
   const [skillsError, setSkillsError] = useState<string | null>(null);
-  const [activeSkillTabId, setActiveSkillTabId] = useState<string>("");
-  const [editedSkillContentByTabId, setEditedSkillContentByTabId] = useState<
-    Record<string, string>
-  >({});
-  const [skillSaveError, setSkillSaveError] = useState<string | null>(null);
-  const [isSavingSkill, setIsSavingSkill] = useState(false);
-  const [editingSkillTabId, setEditingSkillTabId] = useState<string | null>(
-    null,
-  );
-  const [isDeletingSkill, setIsDeletingSkill] = useState(false);
-  const [isCreateSkillOpen, setIsCreateSkillOpen] = useState(false);
-  const [newSkillName, setNewSkillName] = useState("");
-  const [newSkillContent, setNewSkillContent] = useState("");
-  const [isCreatingSkill, setIsCreatingSkill] = useState(false);
-  const [createSkillError, setCreateSkillError] = useState<string | null>(null);
   const [engineDropdownOpen, setEngineDropdownOpen] = useState(false);
   const [engineSearch, setEngineSearch] = useState("");
   const [engineResults, setEngineResults] = useState<
@@ -439,7 +410,7 @@ export const ChatInterface = () => {
   const previousMessageCountRef = useRef(0);
   const isPinnedToBottomRef = useRef(true);
   const wasStreamingRef = useRef(false);
-  const fetchedSkillsProjectIdRef = useRef<string | null>(null);
+  const fetchedSkillsWorkspaceIdRef = useRef<string | null>(null);
   const loadedSelectedEnginesProjectIdRef = useRef<string | null>(null);
   const slashSignatureRef = useRef<string | null>(null);
   const trimmedMessage = inputMessage.trim();
@@ -828,39 +799,32 @@ export const ChatInterface = () => {
   }, [activeTab, dispatch]);
 
   useEffect(() => {
-    if (!projectId) {
-      fetchedSkillsProjectIdRef.current = null;
+    if (!workspaceId) {
+      fetchedSkillsWorkspaceIdRef.current = null;
       setSkillsError(null);
       setIsLoadingSkills(false);
       return;
     }
 
-    if (fetchedSkillsProjectIdRef.current === projectId) {
+    if (fetchedSkillsWorkspaceIdRef.current === workspaceId) {
       return;
     }
 
-    fetchedSkillsProjectIdRef.current = projectId;
+    fetchedSkillsWorkspaceIdRef.current = workspaceId;
     setSkillsError(null);
     setIsLoadingSkills(true);
 
-    void dispatch(querySkills({ projectId, runPixel }))
+    void dispatch(querySkills({ workspaceId, runPixel }))
       .unwrap()
       .catch((error) => {
         console.error("Failed to load skills:", error);
-        fetchedSkillsProjectIdRef.current = null;
-        setSkillsError("Failed to load skills for this project.");
+        fetchedSkillsWorkspaceIdRef.current = null;
+        setSkillsError("Failed to load skills.");
       })
       .finally(() => {
         setIsLoadingSkills(false);
       });
-  }, [dispatch, projectId, runPixel]);
-
-  useEffect(() => {
-    setEditedSkillContentByTabId({});
-    setSkillSaveError(null);
-    setEditingSkillTabId(null);
-    setActiveSkillTabId("");
-  }, [projectId]);
+  }, [dispatch, workspaceId, runPixel]);
 
   useEffect(() => {
     if (!projectId) {
@@ -1050,276 +1014,6 @@ export const ChatInterface = () => {
       runPixel,
     ],
   );
-
-  const skillTabs = useMemo<SkillTab[]>(() => {
-    const tabs: SkillTab[] = [];
-
-    if (claudeMd?.content) {
-      tabs.push({
-        id: "claude-md",
-        label: claudeMd.name || "CLAUDE.md",
-        skillName: claudeMd.name || "CLAUDE.md",
-        content: claudeMd.content,
-      });
-    }
-
-    for (let index = 0; index < skills.length; index += 1) {
-      const skill = skills[index];
-      if (!skill.content) {
-        continue;
-      }
-      tabs.push({
-        id: `${skill.name || "skill"}-${index}`,
-        label: skill.name || `Skill ${index + 1}`,
-        skillName: skill.name || `Skill ${index + 1}`,
-        content: skill.content,
-      });
-    }
-
-    return tabs;
-  }, [claudeMd, skills]);
-  const hasSkillsContent = skillTabs.length > 0;
-  const activeSkillTab =
-    skillTabs.find((tab) => tab.id === activeSkillTabId) ??
-    skillTabs[0] ??
-    null;
-  const activeSkillContent = activeSkillTab
-    ? (editedSkillContentByTabId[activeSkillTab.id] ?? activeSkillTab.content)
-    : "";
-  const isActiveSkillEditing =
-    Boolean(activeSkillTab) && editingSkillTabId === activeSkillTab?.id;
-  const isActiveSkillDirty = Boolean(
-    activeSkillTab && activeSkillContent !== activeSkillTab.content,
-  );
-
-  useEffect(() => {
-    if (!isSkillsOpen) {
-      return;
-    }
-
-    if (skillTabs.length === 0) {
-      setActiveSkillTabId("");
-      return;
-    }
-
-    if (!skillTabs.some((tab) => tab.id === activeSkillTabId)) {
-      setActiveSkillTabId(skillTabs[0].id);
-    }
-  }, [activeSkillTabId, isSkillsOpen, skillTabs]);
-
-  useEffect(() => {
-    if (!editingSkillTabId) {
-      return;
-    }
-
-    if (!skillTabs.some((tab) => tab.id === editingSkillTabId)) {
-      setEditingSkillTabId(null);
-      setSkillSaveError(null);
-    }
-  }, [editingSkillTabId, skillTabs]);
-
-  useEffect(() => {
-    setEditedSkillContentByTabId((previous) => {
-      if (Object.keys(previous).length === 0) {
-        return previous;
-      }
-
-      const validIds = new Set(skillTabs.map((tab) => tab.id));
-      const nextDrafts: Record<string, string> = {};
-      let hasRemovedEntry = false;
-
-      for (const [tabId, content] of Object.entries(previous)) {
-        if (validIds.has(tabId)) {
-          nextDrafts[tabId] = content;
-          continue;
-        }
-        hasRemovedEntry = true;
-      }
-
-      return hasRemovedEntry ? nextDrafts : previous;
-    });
-  }, [skillTabs]);
-
-  const handleSaveSkill = useCallback(async () => {
-    if (
-      !activeSkillTab ||
-      !projectId ||
-      isSavingSkill ||
-      !isActiveSkillEditing
-    ) {
-      return;
-    }
-
-    const tabId = activeSkillTab.id;
-    const skillName = activeSkillTab.skillName;
-    const skillContent =
-      editedSkillContentByTabId[tabId] ?? activeSkillTab.content;
-
-    if (skillContent === activeSkillTab.content) {
-      return;
-    }
-
-    setSkillSaveError(null);
-    setIsSavingSkill(true);
-
-    try {
-      const response = await dispatch(
-        updateSkill({
-          projectId,
-          skillName,
-          skillContent,
-          runPixel,
-        }),
-      ).unwrap();
-
-      if (!response.result) {
-        setSkillSaveError("Failed to update this skill.");
-        return;
-      }
-
-      setEditedSkillContentByTabId((previous) => {
-        if (!(tabId in previous)) {
-          return previous;
-        }
-        const nextDrafts = { ...previous };
-        delete nextDrafts[tabId];
-        return nextDrafts;
-      });
-      setEditingSkillTabId(null);
-      setSkillSaveError(null);
-    } catch (error) {
-      console.error("Failed to update skill:", error);
-      setSkillSaveError("Failed to update this skill.");
-    } finally {
-      setIsSavingSkill(false);
-    }
-  }, [
-    activeSkillTab,
-    dispatch,
-    editedSkillContentByTabId,
-    isActiveSkillEditing,
-    isSavingSkill,
-    projectId,
-    runPixel,
-  ]);
-
-  const handleStartSkillEdit = useCallback(() => {
-    if (!activeSkillTab) {
-      return;
-    }
-
-    setEditedSkillContentByTabId((previous) => ({
-      ...previous,
-      [activeSkillTab.id]:
-        previous[activeSkillTab.id] ?? activeSkillTab.content,
-    }));
-    setEditingSkillTabId(activeSkillTab.id);
-    setSkillSaveError(null);
-  }, [activeSkillTab]);
-
-  const handleCancelSkillEdit = useCallback(() => {
-    if (!activeSkillTab) {
-      return;
-    }
-
-    setEditedSkillContentByTabId((previous) => {
-      if (!(activeSkillTab.id in previous)) {
-        return previous;
-      }
-      const nextDrafts = { ...previous };
-      delete nextDrafts[activeSkillTab.id];
-      return nextDrafts;
-    });
-    setEditingSkillTabId(null);
-    setSkillSaveError(null);
-  }, [activeSkillTab]);
-
-  const handleDeleteSkill = useCallback(async () => {
-    if (!activeSkillTab || !projectId || isDeletingSkill) {
-      return;
-    }
-
-    if (activeSkillTab.id === "claude-md") {
-      return;
-    }
-
-    setIsDeletingSkill(true);
-    try {
-      const response = await dispatch(
-        deleteSkill({
-          projectId,
-          skillName: activeSkillTab.skillName,
-          runPixel,
-        }),
-      ).unwrap();
-
-      if (!response.result) {
-        setSkillSaveError("Failed to delete this skill.");
-        return;
-      }
-
-      setEditingSkillTabId(null);
-      setSkillSaveError(null);
-      setEditedSkillContentByTabId((previous) => {
-        if (!(activeSkillTab.id in previous)) {
-          return previous;
-        }
-        const nextDrafts = { ...previous };
-        delete nextDrafts[activeSkillTab.id];
-        return nextDrafts;
-      });
-    } catch (error) {
-      console.error("Failed to delete skill:", error);
-      setSkillSaveError("Failed to delete this skill.");
-    } finally {
-      setIsDeletingSkill(false);
-    }
-  }, [activeSkillTab, dispatch, isDeletingSkill, projectId, runPixel]);
-
-  const handleCreateSkill = useCallback(async () => {
-    const trimmedName = newSkillName.trim();
-    const trimmedContent = newSkillContent.trim();
-
-    if (!trimmedName || !trimmedContent || !projectId || isCreatingSkill) {
-      return;
-    }
-
-    setCreateSkillError(null);
-    setIsCreatingSkill(true);
-
-    try {
-      const response = await dispatch(
-        createSkill({
-          projectId,
-          skillName: trimmedName,
-          skillContent: trimmedContent,
-          runPixel,
-        }),
-      ).unwrap();
-
-      if (!response.result) {
-        setCreateSkillError("Failed to create skill.");
-        return;
-      }
-
-      setNewSkillName("");
-      setNewSkillContent("");
-      setIsCreateSkillOpen(false);
-      setCreateSkillError(null);
-    } catch (error) {
-      console.error("Failed to create skill:", error);
-      setCreateSkillError("Failed to create skill.");
-    } finally {
-      setIsCreatingSkill(false);
-    }
-  }, [
-    dispatch,
-    isCreatingSkill,
-    newSkillContent,
-    newSkillName,
-    projectId,
-    runPixel,
-  ]);
 
   return (
     <>
@@ -1911,12 +1605,14 @@ export const ChatInterface = () => {
                           View Skills
                         </Button>
                       </DialogTrigger>
-                      <DialogContent className="flex h-[78vh] w-[92vw] max-w-5xl flex-col">
+                      <DialogContent className="flex max-h-[78vh] w-[92vw] max-w-2xl flex-col">
                         <DialogHeader>
-                          <DialogTitle>Project Skills</DialogTitle>
-                          <DialogDescription></DialogDescription>
+                          <DialogTitle>Skills</DialogTitle>
+                          <DialogDescription>
+                            Skills accessible to this agent.
+                          </DialogDescription>
                         </DialogHeader>
-                        <div className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-1">
+                        <div className="flex-1 min-h-0 overflow-y-auto pr-1">
                           {isLoadingSkills ? (
                             <p className="text-sm text-muted-foreground">
                               Loading skills...
@@ -1925,346 +1621,28 @@ export const ChatInterface = () => {
                             <p className="text-sm text-destructive">
                               {skillsError}
                             </p>
-                          ) : !hasSkillsContent ? (
-                            <div className="space-y-4">
-                              <p className="text-sm text-muted-foreground">
-                                No skills found for this project.
-                              </p>
-                              <Dialog
-                                open={isCreateSkillOpen}
-                                onOpenChange={(nextOpen) => {
-                                  if (!isCreatingSkill) {
-                                    setIsCreateSkillOpen(nextOpen);
-                                    if (!nextOpen) {
-                                      setCreateSkillError(null);
-                                    }
-                                  }
-                                }}
-                              >
-                                <DialogTrigger asChild>
-                                  <Button size="sm" className="gap-1">
-                                    <Plus className="h-3.5 w-3.5" />
-                                    Create Skill
-                                  </Button>
-                                </DialogTrigger>
-                                <DialogContent>
-                                  <DialogHeader>
-                                    <DialogTitle>Create Skill</DialogTitle>
-                                    <DialogDescription>
-                                      Add a new skill to this project.
-                                    </DialogDescription>
-                                  </DialogHeader>
-                                  <div className="space-y-4">
-                                    <div className="space-y-2">
-                                      <Label htmlFor="new-skill-name-empty">
-                                        Skill Name
-                                      </Label>
-                                      <Input
-                                        id="new-skill-name-empty"
-                                        placeholder="my-skill.md"
-                                        value={newSkillName}
-                                        onChange={(event) => {
-                                          setNewSkillName(event.target.value);
-                                          setCreateSkillError(null);
-                                        }}
-                                        autoFocus
-                                      />
-                                    </div>
-                                    <div className="space-y-2">
-                                      <Label htmlFor="new-skill-content-empty">
-                                        Content
-                                      </Label>
-                                      <Textarea
-                                        id="new-skill-content-empty"
-                                        rows={8}
-                                        placeholder="Skill content..."
-                                        value={newSkillContent}
-                                        onChange={(event) => {
-                                          setNewSkillContent(
-                                            event.target.value,
-                                          );
-                                          setCreateSkillError(null);
-                                        }}
-                                        className="font-mono text-xs"
-                                      />
-                                    </div>
-                                    {createSkillError ? (
-                                      <p className="text-sm text-destructive">
-                                        {createSkillError}
-                                      </p>
-                                    ) : null}
-                                  </div>
-                                  <DialogFooter>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      onClick={() =>
-                                        setIsCreateSkillOpen(false)
-                                      }
-                                      disabled={isCreatingSkill}
-                                    >
-                                      Cancel
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      onClick={handleCreateSkill}
-                                      disabled={
-                                        !newSkillName.trim() ||
-                                        !newSkillContent.trim() ||
-                                        isCreatingSkill
-                                      }
-                                    >
-                                      {isCreatingSkill
-                                        ? "Creating..."
-                                        : "Create"}
-                                    </Button>
-                                  </DialogFooter>
-                                </DialogContent>
-                              </Dialog>
-                            </div>
+                          ) : skills.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">
+                              No skills available.
+                            </p>
                           ) : (
-                            <div className="flex h-full min-h-0 flex-col space-y-3">
-                              <div className="flex items-center gap-2">
-                                <div className="overflow-x-auto flex-1">
-                                  <div className="inline-flex min-w-full gap-2 rounded-lg border border-border/60 bg-muted/30 p-1">
-                                    {skillTabs.map((tab) => {
-                                      const isActive =
-                                        tab.id === activeSkillTab?.id;
-                                      return (
-                                        <button
-                                          key={tab.id}
-                                          type="button"
-                                          onClick={() => {
-                                            setActiveSkillTabId(tab.id);
-                                            setEditingSkillTabId(null);
-                                            setSkillSaveError(null);
-                                          }}
-                                          className={cn(
-                                            "rounded-md px-3 py-1.5 text-xs font-medium whitespace-nowrap transition",
-                                            isActive
-                                              ? "bg-white text-foreground shadow-sm"
-                                              : "text-muted-foreground hover:bg-white/70 hover:text-foreground",
-                                          )}
-                                        >
-                                          {tab.label}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                                <Dialog
-                                  open={isCreateSkillOpen}
-                                  onOpenChange={(nextOpen) => {
-                                    if (!isCreatingSkill) {
-                                      setIsCreateSkillOpen(nextOpen);
-                                      if (!nextOpen) {
-                                        setCreateSkillError(null);
-                                      }
-                                    }
-                                  }}
+                            <ul className="space-y-2">
+                              {skills.map((skill) => (
+                                <li
+                                  key={skill.skill_id}
+                                  className="rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-3"
                                 >
-                                  <DialogTrigger asChild>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="gap-1 shrink-0"
-                                    >
-                                      <Plus className="h-3.5 w-3.5" />
-                                      New Skill
-                                    </Button>
-                                  </DialogTrigger>
-                                  <DialogContent>
-                                    <DialogHeader>
-                                      <DialogTitle>Create Skill</DialogTitle>
-                                      <DialogDescription>
-                                        Add a new skill to this project.
-                                      </DialogDescription>
-                                    </DialogHeader>
-                                    <div className="space-y-4">
-                                      <div className="space-y-2">
-                                        <Label htmlFor="new-skill-name">
-                                          Skill Name
-                                        </Label>
-                                        <Input
-                                          id="new-skill-name"
-                                          placeholder="my-skill.md"
-                                          value={newSkillName}
-                                          onChange={(event) => {
-                                            setNewSkillName(event.target.value);
-                                            setCreateSkillError(null);
-                                          }}
-                                          autoFocus
-                                        />
-                                      </div>
-                                      <div className="space-y-2">
-                                        <Label htmlFor="new-skill-content">
-                                          Content
-                                        </Label>
-                                        <Textarea
-                                          id="new-skill-content"
-                                          rows={8}
-                                          placeholder="Skill content..."
-                                          value={newSkillContent}
-                                          onChange={(event) => {
-                                            setNewSkillContent(
-                                              event.target.value,
-                                            );
-                                            setCreateSkillError(null);
-                                          }}
-                                          className="font-mono text-xs"
-                                        />
-                                      </div>
-                                      {createSkillError ? (
-                                        <p className="text-sm text-destructive">
-                                          {createSkillError}
-                                        </p>
-                                      ) : null}
-                                    </div>
-                                    <DialogFooter>
-                                      <Button
-                                        type="button"
-                                        variant="outline"
-                                        onClick={() =>
-                                          setIsCreateSkillOpen(false)
-                                        }
-                                        disabled={isCreatingSkill}
-                                      >
-                                        Cancel
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        onClick={handleCreateSkill}
-                                        disabled={
-                                          !newSkillName.trim() ||
-                                          !newSkillContent.trim() ||
-                                          isCreatingSkill
-                                        }
-                                      >
-                                        {isCreatingSkill
-                                          ? "Creating..."
-                                          : "Create"}
-                                      </Button>
-                                    </DialogFooter>
-                                  </DialogContent>
-                                </Dialog>
-                              </div>
-                              <section className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border/60 bg-white/70 dark:bg-zinc-800/50 p-3">
-                                {activeSkillTab ? (
-                                  <div className="flex h-full min-h-0 flex-col gap-3">
-                                    <div className="flex items-center justify-between gap-2">
-                                      {isActiveSkillEditing ? (
-                                        <>
-                                          <p className="text-xs text-muted-foreground">
-                                            Edit and save this skill tab.
-                                          </p>
-                                          <div className="flex items-center gap-2">
-                                            <Button
-                                              type="button"
-                                              size="sm"
-                                              variant="outline"
-                                              onClick={handleCancelSkillEdit}
-                                              disabled={isSavingSkill}
-                                            >
-                                              Cancel
-                                            </Button>
-                                            <Button
-                                              type="button"
-                                              size="sm"
-                                              onClick={handleSaveSkill}
-                                              disabled={
-                                                !isActiveSkillDirty ||
-                                                isSavingSkill
-                                              }
-                                            >
-                                              {isSavingSkill
-                                                ? "Saving..."
-                                                : "Save"}
-                                            </Button>
-                                          </div>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <p className="text-xs text-muted-foreground">
-                                            View this skill tab.
-                                          </p>
-                                          <div className="flex items-center gap-2">
-                                            {activeSkillTab.id !==
-                                            "claude-md" ? (
-                                              <Button
-                                                type="button"
-                                                size="sm"
-                                                variant="destructive"
-                                                onClick={handleDeleteSkill}
-                                                disabled={isDeletingSkill}
-                                                className="gap-1"
-                                              >
-                                                <Trash2 className="h-3.5 w-3.5" />
-                                                {isDeletingSkill
-                                                  ? "Deleting..."
-                                                  : "Delete"}
-                                              </Button>
-                                            ) : null}
-                                            <Button
-                                              type="button"
-                                              size="sm"
-                                              onClick={handleStartSkillEdit}
-                                            >
-                                              Edit
-                                            </Button>
-                                          </div>
-                                        </>
-                                      )}
-                                    </div>
-                                    {isActiveSkillEditing ? (
-                                      <>
-                                        <Textarea
-                                          value={activeSkillContent}
-                                          onChange={(event) => {
-                                            setEditedSkillContentByTabId(
-                                              (previous) => ({
-                                                ...previous,
-                                                [activeSkillTab.id]:
-                                                  event.target.value,
-                                              }),
-                                            );
-                                            setSkillSaveError(null);
-                                          }}
-                                          className="min-h-[14rem] flex-1 resize-none font-mono text-xs"
-                                        />
-                                        {skillSaveError ? (
-                                          <p className="text-sm text-destructive">
-                                            {skillSaveError}
-                                          </p>
-                                        ) : null}
-                                        <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border/50 bg-white/80 dark:bg-zinc-800/60 p-3">
-                                          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                                            Preview
-                                          </p>
-                                          <MarkdownRenderer
-                                            content={activeSkillContent}
-                                            className="text-sm text-foreground"
-                                          />
-                                        </div>
-                                      </>
-                                    ) : (
-                                      <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border/50 bg-white/80 dark:bg-zinc-800/60 p-3">
-                                        <p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                                          Content
-                                        </p>
-                                        <MarkdownRenderer
-                                          content={activeSkillTab.content}
-                                          className="text-sm text-foreground"
-                                        />
-                                      </div>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <p className="text-sm text-muted-foreground">
-                                    No skill selected.
+                                  <p className="text-sm font-medium">
+                                    {skill.name || skill.slug || skill.skill_id}
                                   </p>
-                                )}
-                              </section>
-                            </div>
+                                  {skill.description ? (
+                                    <p className="mt-1 text-xs text-muted-foreground">
+                                      {skill.description}
+                                    </p>
+                                  ) : null}
+                                </li>
+                              ))}
+                            </ul>
                           )}
                         </div>
                         <DialogFooter>
