@@ -1,16 +1,27 @@
 import {
+  Activity,
   ArrowUp,
   BookOpen,
+  Bot,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
+  CircleDot,
   Copy,
+  FileSearch,
+  MessageSquareText,
+  PanelRightClose,
+  PanelRightOpen,
+  Pencil,
   Plus,
   Search,
   Settings,
   Sparkles,
   SquarePen,
+  Terminal,
   Trash2,
   TriangleAlert,
+  Wrench,
 } from "lucide-react";
 import {
   type ChangeEvent,
@@ -27,7 +38,6 @@ import {
 import { toast } from "sonner";
 import { ConversationHistoryPanel } from "@/components/chat/ConversationHistoryPanel";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
-import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
 import { IssuesPanel } from "@/components/chat/IssuesPanel";
 import { EnginesPanel } from "@/components/chat/EnginesPanel";
 import { AgentPicker } from "@/components/chat/AgentPicker";
@@ -112,7 +122,10 @@ import {
 import { loadProjectEngineDependencies } from "@/store/slices/enginesSlice";
 import { clearGitState, fetchCommitHistory } from "@/store/slices/gitSlice";
 import { submitAgentMessage } from "@/store/thunks/submitAgentMessage";
-import { getTranscriptEventStableKey } from "@/types/transcript";
+import {
+  getTranscriptEventStableKey,
+  type TranscriptEvent,
+} from "@/types/transcript";
 
 type SkillTab = {
   id: string;
@@ -120,6 +133,8 @@ type SkillTab = {
   skillName: string;
   content: string;
 };
+
+type InspectorTab = "activity" | "issues" | "engines" | "history" | "settings";
 
 const PERMISSION_MODE_OPTIONS: Array<{
   value: PermissionMode;
@@ -216,6 +231,238 @@ const currentSlashValue = (
   thinkingEnabled: boolean,
 ): string =>
   command.name === "/effort" ? effort : thinkingEnabled ? "on" : "off";
+
+const TOOL_ENGINE_PREFIX_RE =
+  /^a?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}_+/i;
+
+const formatTimestamp = (timestamp?: string) => {
+  if (!timestamp) return "";
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return timestamp;
+  return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+};
+
+const stripToolEnginePrefix = (toolName?: string) =>
+  (toolName ?? "").trim().replace(TOOL_ENGINE_PREFIX_RE, "");
+
+const toTitleCase = (value: string) =>
+  value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const getToolDisplayName = (toolName?: string) => {
+  const normalized = stripToolEnginePrefix(toolName);
+  return normalized ? toTitleCase(normalized) : "Tool";
+};
+
+const summarizeArgs = (args?: Record<string, unknown>) => {
+  if (!args) return "";
+  const preferredKeys = [
+    "file_path",
+    "filePath",
+    "path",
+    "command",
+    "query",
+    "pattern",
+    "glob",
+    "offset",
+    "limit",
+  ];
+  const entries = Object.entries(args).filter(
+    ([, value]) => value !== undefined && value !== null && value !== "",
+  );
+  const ordered = [
+    ...preferredKeys.flatMap((key) =>
+      entries.filter(([entryKey]) => entryKey === key),
+    ),
+    ...entries.filter(([key]) => !preferredKeys.includes(key)),
+  ].slice(0, 3);
+
+  return ordered
+    .map(([key, value]) => {
+      const stringValue =
+        typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+      const compact = stringValue.replace(/\s+/g, " ").trim();
+      return `${key}=${compact.length > 80 ? `${compact.slice(0, 77)}...` : compact}`;
+    })
+    .join(", ");
+};
+
+const summarizeText = (value: string, limit = 180) => {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= limit) return compact;
+  return `${compact.slice(0, limit - 3)}...`;
+};
+
+const getActivityGroup = (event: TranscriptEvent) => {
+  if (event.kind === "user-prompt") return "Goal";
+  if (event.kind === "assistant-text") {
+    return event.display === "intent" ? "Planning" : "Milestone";
+  }
+  if (event.kind === "agent-result") return event.isError ? "Needs attention" : "Complete";
+  if (event.kind === "max-turns-reached") return "Needs attention";
+
+  const toolName =
+    event.kind === "tool-invocation" ? event.toolName : event.toolName ?? "";
+  const key = stripToolEnginePrefix(toolName)
+    .replace(/[\s_-]+/g, "")
+    .toLowerCase();
+
+  if (
+    key.includes("read") ||
+    key.includes("grep") ||
+    key.includes("glob") ||
+    key.includes("search") ||
+    key.includes("view")
+  ) {
+    return "Reading files";
+  }
+  if (
+    key.includes("write") ||
+    key.includes("edit") ||
+    key.includes("save") ||
+    key.includes("commit") ||
+    key.includes("patch")
+  ) {
+    return "Editing";
+  }
+  if (
+    key.includes("bash") ||
+    key.includes("command") ||
+    key.includes("test") ||
+    key.includes("build") ||
+    key.includes("publish")
+  ) {
+    return "Running checks";
+  }
+  return "Acting";
+};
+
+const getActivityIcon = (event: TranscriptEvent) => {
+  const group = getActivityGroup(event);
+  if (group === "Goal") return MessageSquareText;
+  if (group === "Planning" || group === "Milestone") return Sparkles;
+  if (group === "Reading files") return FileSearch;
+  if (group === "Editing") return Pencil;
+  if (group === "Running checks") return Terminal;
+  if (group === "Complete") return CheckCircle2;
+  if (group === "Needs attention") return TriangleAlert;
+  return Wrench;
+};
+
+const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
+  const Icon = getActivityIcon(event);
+  const group = getActivityGroup(event);
+  const isWarning = group === "Needs attention";
+  const isComplete = group === "Complete";
+
+  let title = group;
+  let detail = "";
+  let status = "";
+
+  if (event.kind === "user-prompt") {
+    detail = summarizeText(event.text);
+  } else if (event.kind === "assistant-text") {
+    detail = summarizeText(event.text);
+  } else if (event.kind === "tool-invocation") {
+    title = `${group}: ${event.title ?? getToolDisplayName(event.toolName)}`;
+    detail = event.description ?? summarizeArgs(event.arguments);
+    status = event.status === "streaming" ? "running" : "";
+  } else if (event.kind === "tool-result") {
+    title = `${group}: ${event.title ?? getToolDisplayName(event.toolName)}`;
+    detail =
+      event.stats
+        ? [
+            event.stats.readCount > 0 ? `${event.stats.readCount} reads` : "",
+            event.stats.searchCount > 0
+              ? `${event.stats.searchCount} searches`
+              : "",
+            event.stats.bashCount > 0 ? `${event.stats.bashCount} commands` : "",
+            event.stats.editFileCount > 0
+              ? `${event.stats.editFileCount} edits`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        : summarizeText(event.content ?? event.detailedContent ?? "", 140);
+    status = event.status;
+  } else if (event.kind === "max-turns-reached") {
+    detail = `${event.turnCount} of ${event.maxTurns} turns used`;
+  } else if (event.kind === "agent-result") {
+    detail = [
+      typeof event.numTurns === "number" ? `${event.numTurns} turns` : "",
+      typeof event.durationMs === "number"
+        ? `${Math.round(event.durationMs / 1000)}s`
+        : "",
+      event.stopReason ?? "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  return (
+    <div className="group flex min-w-0 items-start gap-2.5 border-b border-slate-200/60 px-3 py-2.5 last:border-b-0 dark:border-white/10">
+      <span
+        className={cn(
+          "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border bg-white text-muted-foreground dark:border-white/10 dark:bg-zinc-900",
+          isComplete && "text-emerald-600 dark:text-emerald-400",
+          isWarning && "text-amber-600 dark:text-amber-400",
+        )}
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-medium text-foreground">
+            {title}
+          </span>
+          {status ? (
+            <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground dark:bg-zinc-800">
+              {status}
+            </span>
+          ) : null}
+        </div>
+        {detail ? (
+          <p className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted-foreground">
+            {detail}
+          </p>
+        ) : null}
+      </div>
+      <span className="shrink-0 pt-1 text-[10px] text-muted-foreground/60">
+        {formatTimestamp(event.timestamp)}
+      </span>
+    </div>
+  );
+};
+
+const ActivityMessageRow = ({ message }: { message: ChatMessage }) => {
+  if (message.status === "error") {
+    return (
+      <div className="border-b border-slate-200/60 px-3 py-3 last:border-b-0 dark:border-white/10">
+        <MessageBubble {...message} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-b border-slate-200/60 px-3 py-2.5 last:border-b-0 dark:border-white/10">
+      <div className="flex items-center gap-2">
+        <CircleDot className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-sm font-medium text-foreground">
+          {message.role === "system" ? "System" : message.author}
+        </span>
+        <span className="text-[10px] text-muted-foreground/60">
+          {message.time}
+        </span>
+      </div>
+      <p className="mt-1 line-clamp-2 pl-5 text-xs text-muted-foreground">
+        {summarizeText(message.content)}
+      </p>
+    </div>
+  );
+};
 
 const MessageBubble = ({
   author,
@@ -387,9 +634,8 @@ export const ChatInterface = () => {
   const [isConfigurationOpen, setIsConfigurationOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isSkillsOpen, setIsSkillsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<
-    "build" | "issues" | "engines" | "history" | "settings"
-  >("build");
+  const [isInspectorOpen, setIsInspectorOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState<InspectorTab>("activity");
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isLoadingSkills, setIsLoadingSkills] = useState(false);
   const [skillsError, setSkillsError] = useState<string | null>(null);
@@ -446,6 +692,46 @@ export const ChatInterface = () => {
   const isStreaming = pendingMessageId !== null;
   const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
   const activeHarnessLabel = getHarnessLabel(harnessType);
+
+  const latestUserGoal = useMemo(() => {
+    for (let index = transcriptEvents.length - 1; index >= 0; index -= 1) {
+      const event = transcriptEvents[index];
+      if (event.kind === "user-prompt" && event.text.trim()) {
+        return event.text.trim();
+      }
+    }
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === "user" && message.content.trim()) {
+        return message.content.trim();
+      }
+    }
+
+    return "";
+  }, [messages, transcriptEvents]);
+
+  const latestMilestone = useMemo(() => {
+    for (let index = transcriptEvents.length - 1; index >= 0; index -= 1) {
+      const event = transcriptEvents[index];
+      if (event.kind === "assistant-text" && event.text.trim()) {
+        return summarizeText(event.text, 120);
+      }
+      if (event.kind === "agent-result") {
+        return event.isError ? "Run needs attention" : "Run complete";
+      }
+      if (event.kind === "tool-result" && event.title) {
+        return event.title;
+      }
+    }
+
+    return "";
+  }, [transcriptEvents]);
+
+  const composerGoal = latestUserGoal || "Ready for your next instruction.";
+  const currentStatusText = isStreaming
+    ? `${activeHarnessLabel} is working`
+    : latestMilestone || "Idle";
 
   const slashMenu = useMemo(
     () =>
@@ -799,7 +1085,8 @@ export const ChatInterface = () => {
       }
 
       dispatch(markIssuesSent({ ids: issueIds, roomId }));
-      setActiveTab("build");
+      setActiveTab("activity");
+      setIsInspectorOpen(true);
       dispatch(
         submitAgentMessage({
           message: buildIssuesRepairPrompt(selectedRecords),
@@ -1323,31 +1610,204 @@ export const ChatInterface = () => {
 
   return (
     <>
-      <div className="relative h-full min-h-[32rem] overflow-hidden rounded-2xl border border-slate-200/60 dark:border-white/10 bg-gradient-to-br from-slate-50/90 via-white/80 to-sky-50/50 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/80 p-6 shadow-xl shadow-slate-400/10 dark:shadow-black/20 backdrop-blur-xl">
-        <div className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-gradient-to-br from-slate-300/40 to-sky-200/30 dark:from-slate-500/15 dark:to-sky-500/10 blur-3xl animate-pulse-soft" />
-        <div
-          className="pointer-events-none absolute -bottom-32 -left-24 h-72 w-72 rounded-full bg-gradient-to-tr from-sky-200/35 to-slate-200/25 dark:from-sky-500/10 dark:to-slate-500/8 blur-3xl animate-pulse-soft"
-          style={{ animationDelay: "1.25s" }}
-        />
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-x-0 bottom-0 z-30",
+          isInspectorOpen
+            ? "lg:right-96 xl:right-[26rem]"
+            : "lg:right-0",
+        )}
+      >
+        <div className="pointer-events-auto overflow-visible border-t border-slate-200/80 bg-white/95 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/95 dark:shadow-black/30">
+          <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-200/70 px-3 py-2 dark:border-white/10">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  Current goal
+                </span>
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 shrink-0 rounded-full",
+                    isStreaming ? "bg-emerald-500" : "bg-slate-300",
+                  )}
+                />
+                <span className="truncate text-xs text-muted-foreground">
+                  {currentStatusText}
+                </span>
+              </div>
+              <p className="mt-0.5 truncate text-sm font-medium text-foreground">
+                {summarizeText(composerGoal, 160)}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Badge
+                variant="outline"
+                className="hidden h-7 gap-1 px-2 sm:flex"
+              >
+                <Bot className="h-3.5 w-3.5" />
+                {activeHarnessLabel}
+              </Badge>
+              <Badge
+                variant="outline"
+                className="hidden h-7 px-2 text-[11px] sm:flex"
+              >
+                {toTitleCase(permissionMode)}
+              </Badge>
+              {unseenIssuesCount > 0 ? (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  onClick={() => {
+                    setIsInspectorOpen(true);
+                    setActiveTab("issues");
+                  }}
+                >
+                  <TriangleAlert className="h-3.5 w-3.5" />
+                  {unseenIssuesCount}
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1.5 px-2 text-xs"
+                onClick={() => setIsInspectorOpen((value) => !value)}
+              >
+                {isInspectorOpen ? (
+                  <PanelRightClose className="h-3.5 w-3.5" />
+                ) : (
+                  <PanelRightOpen className="h-3.5 w-3.5" />
+                )}
+                Inspector
+              </Button>
+            </div>
+          </div>
+          <div className="flex items-end gap-2 px-3 pb-3 pt-2">
+            <div className="relative flex-1">
+              {slashMenu && activeSlashCommand ? (
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-full max-w-xl overflow-hidden rounded-lg border border-slate-200/80 bg-white shadow-xl shadow-slate-900/10 dark:border-white/10 dark:bg-zinc-950">
+                  <div className="flex max-h-72">
+                    <div className="w-32 shrink-0 space-y-0.5 overflow-y-auto border-r border-slate-200/70 bg-slate-50 p-1.5 dark:border-white/10 dark:bg-zinc-900">
+                      {slashMenu.commands.map((command, index) => {
+                        const isActive = index === slashCommandIndex;
+                        return (
+                          <button
+                            key={command.name}
+                            type="button"
+                            onClick={() => selectSlashCommand(index)}
+                            className={cn(
+                              "flex w-full flex-col rounded-md px-2.5 py-1.5 text-left transition-colors",
+                              isActive
+                                ? "bg-white shadow-sm dark:bg-zinc-800"
+                                : "hover:bg-white/70 dark:hover:bg-zinc-800/60",
+                            )}
+                          >
+                            <span className="text-sm font-medium">
+                              {command.label}
+                            </span>
+                            <span className="font-mono text-[10px] text-muted-foreground">
+                              {command.name}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex-1 space-y-0.5 overflow-y-auto p-1.5">
+                      <p className="px-2 pb-1 pt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                        {activeSlashCommand.description}
+                      </p>
+                      {activeSlashOptions.map((option, index) => {
+                        const isActive = index === slashOptionIndex;
+                        const isCurrent =
+                          currentSlashValue(
+                            activeSlashCommand,
+                            effort,
+                            thinkingEnabled,
+                          ) === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onMouseEnter={() => setActiveOptionIndex(index)}
+                            onClick={() =>
+                              applySlashOption(activeSlashCommand, option.value)
+                            }
+                            className={cn(
+                              "flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left transition-colors",
+                              isActive
+                                ? "bg-emerald-500/10 text-foreground"
+                                : "hover:bg-accent/50",
+                            )}
+                          >
+                            <span className="flex min-w-0 flex-col">
+                              <span className="text-sm font-medium">
+                                {option.label}
+                              </span>
+                              <span className="truncate text-[11px] text-muted-foreground">
+                                {option.description}
+                              </span>
+                            </span>
+                            {isCurrent ? (
+                              <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                current
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              <Textarea
+                placeholder="Type a message...  (/ for commands)"
+                rows={2}
+                ref={chatInputRef}
+                value={inputMessage}
+                onChange={handleMessageChange}
+                onKeyDown={handleMessageKeyDown}
+                onSelect={handleInputSelect}
+                className="max-h-60 min-h-[3.25rem] w-full resize-none border-slate-200/80 bg-white text-sm shadow-sm focus-visible:ring-slate-400/30 dark:border-white/10 dark:bg-zinc-900"
+              />
+            </div>
+            <Button
+              disabled={isSendDisabled}
+              onClick={handleSendMessage}
+              size="icon"
+              className="h-9 w-9 shrink-0 rounded-full bg-emerald-600 text-white shadow-md shadow-emerald-500/20 transition-all duration-200 hover:bg-emerald-700 hover:shadow-lg hover:shadow-emerald-500/30 disabled:bg-slate-300 disabled:shadow-none dark:disabled:bg-zinc-700"
+            >
+              <ArrowUp className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
 
+      {isInspectorOpen ? (
+        <aside className="absolute inset-y-3 right-3 z-40 flex w-[min(28rem,calc(100%-1.5rem))] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-xl shadow-slate-900/10 dark:border-white/10 dark:bg-zinc-950 dark:shadow-black/30 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:w-96 xl:w-[26rem]">
         <Tabs
           value={activeTab}
-          onValueChange={(value) =>
-            setActiveTab(
-              value as "build" | "issues" | "engines" | "history" | "settings",
-            )
-          }
-          className="relative flex h-full flex-col"
+          onValueChange={(value) => setActiveTab(value as InspectorTab)}
+          className="flex h-full min-h-0 flex-col"
         >
-          <header className="flex flex-col gap-2 rounded-t-xl border border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-slate-50/60 via-white/40 to-sky-50/30 px-4 py-3">
-            <div className="relative flex items-center justify-center">
-              <div className="absolute left-0 top-1/2 -translate-y-1/2">
-                <ConversationHistoryPanel />
+          <header className="border-b border-slate-200/80 bg-slate-50/80 dark:border-white/10 dark:bg-zinc-900/80">
+            <div className="flex items-center justify-between gap-3 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-muted-foreground dark:border-white/10 dark:bg-zinc-950">
+                  <Activity className="h-3.5 w-3.5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-foreground">
+                    Run Inspector
+                  </p>
+                  <p className="truncate text-[11px] text-muted-foreground">
+                    {currentStatusText}
+                  </p>
+                </div>
               </div>
-              <p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
-                Build Your App
-              </p>
-              <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1">
+              <div className="flex shrink-0 items-center gap-1">
+                <ConversationHistoryPanel />
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1356,209 +1816,135 @@ export const ChatInterface = () => {
                 >
                   <SquarePen className="h-4 w-4" />
                 </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsInspectorOpen(false)}
+                  title="Collapse inspector"
+                >
+                  <PanelRightClose className="h-4 w-4" />
+                </Button>
               </div>
             </div>
-            <div className="flex items-center justify-center">
-              <TabsList>
-                <TabsTrigger value="build">Build</TabsTrigger>
-                <TabsTrigger value="issues" className="gap-2">
-                  Issues
-                  {unseenIssuesCount > 0 ? (
-                    <Badge
-                      variant="destructive"
-                      className="rounded-full px-1.5 py-0 text-[10px]"
-                    >
-                      {unseenIssuesCount}
-                    </Badge>
-                  ) : null}
-                </TabsTrigger>
-                <TabsTrigger value="engines">Engines</TabsTrigger>
-                <TabsTrigger value="history">History</TabsTrigger>
-                <TabsTrigger value="settings">Agent</TabsTrigger>
-              </TabsList>
-            </div>
+            <TabsList className="grid h-9 w-full grid-cols-5 rounded-none border-t border-slate-200/80 bg-transparent p-1 dark:border-white/10">
+              <TabsTrigger value="activity" className="gap-1 px-1 text-xs">
+                <Activity className="h-3.5 w-3.5" />
+                Activity
+              </TabsTrigger>
+              <TabsTrigger value="issues" className="gap-1 px-1 text-xs">
+                <TriangleAlert className="h-3.5 w-3.5" />
+                <span>Issues</span>
+                {unseenIssuesCount > 0 ? (
+                  <Badge
+                    variant="destructive"
+                    className="rounded-full px-1.5 py-0 text-[10px]"
+                  >
+                    {unseenIssuesCount}
+                  </Badge>
+                ) : null}
+              </TabsTrigger>
+              <TabsTrigger value="engines" className="gap-1 px-1 text-xs">
+                <Terminal className="h-3.5 w-3.5" />
+                Engines
+              </TabsTrigger>
+              <TabsTrigger value="history" className="gap-1 px-1 text-xs">
+                <BookOpen className="h-3.5 w-3.5" />
+                History
+              </TabsTrigger>
+              <TabsTrigger value="settings" className="gap-1 px-1 text-xs">
+                <Settings className="h-3.5 w-3.5" />
+                Agent
+              </TabsTrigger>
+            </TabsList>
           </header>
 
           <TabsContent
-            value="build"
-            className="mt-0 flex flex-1 min-h-0 flex-col rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-white/80 dark:bg-zinc-900/60 backdrop-blur-xl shadow-lg shadow-slate-400/5"
+            value="activity"
+            className="mt-0 flex min-h-0 flex-1 flex-col bg-white dark:bg-zinc-950"
           >
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200/70 px-3 py-2 dark:border-white/10">
+              <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                <span
+                  className={cn(
+                    "h-2 w-2 shrink-0 rounded-full",
+                    isStreaming ? "bg-emerald-500" : "bg-slate-300",
+                  )}
+                />
+                <span className="truncate">{currentStatusText}</span>
+              </div>
+              <Badge variant="outline" className="h-6 px-2 text-[10px]">
+                {timeline.length} events
+              </Badge>
+            </div>
             <div
               ref={messagesContainerRef}
-              className="flex-1 min-h-0 space-y-4 overflow-y-auto px-4 py-5"
+              className="min-h-0 flex-1 overflow-y-auto"
             >
               {messages.length === 0 && transcriptEvents.length === 0 ? (
-                <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-zinc-800">
-                    <Sparkles className="h-8 w-8 text-emerald-500" />
+                <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-muted-foreground dark:border-white/10 dark:bg-zinc-900">
+                    <Activity className="h-5 w-5" />
                   </div>
                   <div className="space-y-1">
-                    <h3 className="text-lg font-semibold tracking-tight">
-                      Describe what you want to build
+                    <h3 className="text-sm font-semibold tracking-tight">
+                      No activity yet
                     </h3>
-                    <p className="text-sm text-muted-foreground">
-                      Share a workflow, paste requirements, or ask for changes
-                      in plain language.
+                    <p className="text-xs text-muted-foreground">
+                      Activity for the current run will appear here.
                     </p>
-                    <div className="pt-2 text-xs text-muted-foreground">
-                      Examples: "Create an intake app for internal requests" or
-                      "Turn this spreadsheet into a dashboard."
-                    </div>
                   </div>
                 </div>
               ) : (
                 <>
                   {timeline.map((item) =>
                     item.source === "message" ? (
-                      <MessageBubble key={item.key} {...item.message} />
+                      <ActivityMessageRow key={item.key} message={item.message} />
                     ) : (
-                      <TranscriptEventBubble
-                        key={item.key}
-                        event={item.event}
-                      />
+                      <ActivityEventRow key={item.key} event={item.event} />
                     ),
                   )}
                   {isStreaming ? (
-                    <div className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
+                    <div className="flex items-center gap-2 border-t border-slate-200/70 px-3 py-2.5 text-xs text-muted-foreground dark:border-white/10">
                       <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
                       <span>{activeHarnessLabel} is working...</span>
                     </div>
                   ) : (
-                    <LatestCommitChip
-                      onOpenHistory={() => setActiveTab("history")}
-                    />
+                    <div className="border-t border-slate-200/70 px-3 py-2.5 dark:border-white/10">
+                      <LatestCommitChip
+                        onOpenHistory={() => setActiveTab("history")}
+                      />
+                    </div>
                   )}
                 </>
               )}
             </div>
 
-            <footer className="border-t border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-white/60 to-slate-50/40 px-4 py-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <div className="relative flex-1">
-                  {slashMenu && activeSlashCommand ? (
-                    <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-md overflow-hidden rounded-xl border border-slate-200/70 bg-white/95 shadow-xl shadow-slate-400/20 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/95">
-                      <div className="flex max-h-72">
-                        <div className="w-32 shrink-0 space-y-0.5 overflow-y-auto border-r border-slate-200/60 bg-slate-50/70 p-1.5 dark:border-white/10 dark:bg-zinc-800/40">
-                          {slashMenu.commands.map((command, index) => {
-                            const isActive = index === slashCommandIndex;
-                            return (
-                              <button
-                                key={command.name}
-                                type="button"
-                                onClick={() => selectSlashCommand(index)}
-                                className={cn(
-                                  "flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left transition-colors",
-                                  isActive
-                                    ? "bg-white shadow-sm dark:bg-zinc-700/70"
-                                    : "hover:bg-white/70 dark:hover:bg-zinc-700/40",
-                                )}
-                              >
-                                <span className="text-sm font-medium">
-                                  {command.label}
-                                </span>
-                                <span className="font-mono text-[10px] text-muted-foreground">
-                                  {command.name}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                        <div className="flex-1 space-y-0.5 overflow-y-auto p-1.5">
-                          <p className="px-2 pb-1 pt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                            {activeSlashCommand.description}
-                          </p>
-                          {activeSlashOptions.map((option, index) => {
-                            const isActive = index === slashOptionIndex;
-                            const isCurrent =
-                              currentSlashValue(
-                                activeSlashCommand,
-                                effort,
-                                thinkingEnabled,
-                              ) === option.value;
-                            return (
-                              <button
-                                key={option.value}
-                                type="button"
-                                onMouseEnter={() => setActiveOptionIndex(index)}
-                                onClick={() =>
-                                  applySlashOption(activeSlashCommand, option.value)
-                                }
-                                className={cn(
-                                  "flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-left transition-colors",
-                                  isActive
-                                    ? "bg-emerald-500/10 text-foreground"
-                                    : "hover:bg-accent/50",
-                                )}
-                              >
-                                <span className="flex min-w-0 flex-col">
-                                  <span className="text-sm font-medium">
-                                    {option.label}
-                                  </span>
-                                  <span className="truncate text-[11px] text-muted-foreground">
-                                    {option.description}
-                                  </span>
-                                </span>
-                                {isCurrent ? (
-                                  <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                                    current
-                                  </span>
-                                ) : null}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 border-t border-slate-200/60 bg-slate-50/50 px-3 py-1.5 text-[10px] text-muted-foreground dark:border-white/10 dark:bg-zinc-800/30">
-                        <span>↑↓ options</span>
-                        {slashMenu.commands.length > 1 ? (
-                          <span>←→ switch</span>
-                        ) : null}
-                        <span>↵ apply</span>
-                        <span>esc dismiss</span>
-                      </div>
-                    </div>
-                  ) : null}
-                  <Textarea
-                    placeholder="Type a message…  (/ for commands)"
-                    rows={2}
-                    ref={chatInputRef}
-                    value={inputMessage}
-                    onChange={handleMessageChange}
-                    onKeyDown={handleMessageKeyDown}
-                    onSelect={handleInputSelect}
-                    className="min-h-[3.25rem] max-h-60 w-full resize-none border-slate-200/60 bg-white/90 dark:bg-zinc-800/70 focus-visible:ring-slate-400/30"
-                  />
-                </div>
-                <Button
-                  disabled={isSendDisabled}
-                  onClick={handleSendMessage}
-                  size="icon"
-                  className="h-9 w-9 shrink-0 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20 transition-all duration-200 hover:shadow-lg hover:shadow-emerald-500/30 disabled:bg-slate-300 disabled:shadow-none dark:disabled:bg-zinc-700"
-                >
-                  <ArrowUp className="h-4 w-4" />
-                </Button>
-              </div>
-            </footer>
           </TabsContent>
 
-          <TabsContent value="issues" className="mt-0 flex flex-1 min-h-0">
+          <TabsContent
+            value="issues"
+            className="mt-0 flex min-h-0 flex-1 bg-white dark:bg-zinc-950"
+          >
             <IssuesPanel onAskToFix={handleAskToFixIssues} />
           </TabsContent>
 
           <TabsContent
             value="engines"
-            className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 p-4 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
+            className="mt-0 min-h-0 flex-1 overflow-y-auto bg-white p-4 dark:bg-zinc-950"
           >
             <EnginesPanel />
           </TabsContent>
 
-          <TabsContent value="history" className="mt-0 flex flex-1 min-h-0">
+          <TabsContent
+            value="history"
+            className="mt-0 flex min-h-0 flex-1 bg-white dark:bg-zinc-950"
+          >
             <HistoryPanel />
           </TabsContent>
 
           <TabsContent
             value="settings"
-            className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 p-4 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
+            className="mt-0 min-h-0 flex-1 overflow-y-auto bg-white p-4 dark:bg-zinc-950"
           >
             <div className="flex flex-col gap-5">
               <div className="space-y-2">
@@ -2346,7 +2732,19 @@ export const ChatInterface = () => {
             </div>
           </TabsContent>
         </Tabs>
-      </div>
+        </aside>
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="absolute right-4 top-4 z-20 h-8 gap-1.5 border-slate-200/80 bg-white/90 px-2 text-xs shadow-sm backdrop-blur dark:border-white/10 dark:bg-zinc-950/90"
+          onClick={() => setIsInspectorOpen(true)}
+        >
+          <PanelRightOpen className="h-3.5 w-3.5" />
+          Activity
+        </Button>
+      )}
 
       <ConfirmationDialog
         open={pendingHarnessType !== null}
