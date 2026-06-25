@@ -9,9 +9,11 @@ import {
   CircleDot,
   Copy,
   FileSearch,
+  Image as ImageIcon,
   MessageSquareText,
   PanelRightClose,
   PanelRightOpen,
+  Paperclip,
   Pencil,
   Plus,
   Search,
@@ -22,8 +24,10 @@ import {
   Trash2,
   TriangleAlert,
   Wrench,
+  X,
 } from "lucide-react";
 import {
+  type ClipboardEvent,
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
@@ -170,6 +174,48 @@ const getHarnessLabel = (harnessType: HarnessType) =>
 const isPermissionMode = (value: string): value is PermissionMode =>
   PERMISSION_MODE_OPTIONS.some((option) => option.value === value);
 const MAX_CHAT_INPUT_HEIGHT_PX = 240;
+const MAX_IMAGE_ATTACHMENTS = 4;
+const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+type PendingImageAttachment = {
+  id: string;
+  name: string;
+  size: number;
+  dataUri: string;
+};
+
+const createAttachmentId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `image-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+const formatAttachmentSize = (bytes: number) => {
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const readImageAttachment = (file: File) =>
+  new Promise<PendingImageAttachment>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("Unable to read image."));
+        return;
+      }
+      resolve({
+        id: createAttachmentId(),
+        name: file.name || "image",
+        size: file.size,
+        dataUri: reader.result,
+      });
+    };
+    reader.onerror = () => reject(new Error("Unable to read image."));
+    reader.readAsDataURL(file);
+  });
 
 type SlashMenuContext = {
   replaceStart: number;
@@ -872,6 +918,9 @@ export const ChatInterface = () => {
   const [engineLoading, setEngineLoading] = useState(false);
   const [pendingHarnessType, setPendingHarnessType] =
     useState<HarnessType | null>(null);
+  const [pendingImageAttachments, setPendingImageAttachments] = useState<
+    PendingImageAttachment[]
+  >([]);
   // Local draft so the field can be cleared/typed freely; committed (and
   // sanitized) to the store on blur.
   const [maxTurnsDraft, setMaxTurnsDraft] = useState(String(maxTurns));
@@ -891,6 +940,7 @@ export const ChatInterface = () => {
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [activeOptionIndex, setActiveOptionIndex] = useState(0);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const previousMessageCountRef = useRef(0);
   const isPinnedToBottomRef = useRef(true);
@@ -900,7 +950,9 @@ export const ChatInterface = () => {
   const slashSignatureRef = useRef<string | null>(null);
   const trimmedMessage = inputMessage.trim();
   const isStreaming = pendingMessageId !== null;
-  const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
+  const hasPendingImages = pendingImageAttachments.length > 0;
+  const isSendDisabled =
+    (trimmedMessage.length === 0 && !hasPendingImages) || isStreaming;
   const activeHarnessLabel = getHarnessLabel(harnessType);
 
   const latestUserGoal = useMemo(() => {
@@ -1064,26 +1116,114 @@ export const ChatInterface = () => {
     [],
   );
 
+  const handleAddImageFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const allFiles = Array.from(files);
+      if (allFiles.length === 0) {
+        return;
+      }
+
+      const availableSlots =
+        MAX_IMAGE_ATTACHMENTS - pendingImageAttachments.length;
+      if (availableSlots <= 0) {
+        toast.error(`You can attach up to ${MAX_IMAGE_ATTACHMENTS} images.`);
+        return;
+      }
+
+      const acceptedFiles: File[] = [];
+      for (const file of allFiles) {
+        if (!file.type.startsWith("image/")) {
+          toast.error(`${file.name || "File"} is not an image.`);
+          continue;
+        }
+        if (file.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+          toast.error(
+            `${file.name || "Image"} is larger than ${formatAttachmentSize(
+              MAX_IMAGE_ATTACHMENT_BYTES,
+            )}.`,
+          );
+          continue;
+        }
+        acceptedFiles.push(file);
+      }
+
+      const limitedFiles = acceptedFiles.slice(0, availableSlots);
+      if (acceptedFiles.length > limitedFiles.length) {
+        toast.error(`Only ${availableSlots} more image(s) can be attached.`);
+      }
+      if (limitedFiles.length === 0) {
+        return;
+      }
+
+      try {
+        const nextAttachments = await Promise.all(
+          limitedFiles.map(readImageAttachment),
+        );
+        setPendingImageAttachments((current) => [
+          ...current,
+          ...nextAttachments,
+        ]);
+      } catch (error) {
+        console.error("Failed to read image attachment:", error);
+        toast.error("Could not read one of the selected images.");
+      }
+    },
+    [pendingImageAttachments.length],
+  );
+
+  const handleImageInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      if (event.target.files) {
+        void handleAddImageFiles(event.target.files);
+      }
+      event.target.value = "";
+    },
+    [handleAddImageFiles],
+  );
+
+  const handleMessagePaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const imageFiles = Array.from(event.clipboardData.files).filter((file) =>
+        file.type.startsWith("image/"),
+      );
+      if (imageFiles.length > 0) {
+        void handleAddImageFiles(imageFiles);
+      }
+    },
+    [handleAddImageFiles],
+  );
+
+  const handleRemoveImageAttachment = useCallback((attachmentId: string) => {
+    setPendingImageAttachments((current) =>
+      current.filter((attachment) => attachment.id !== attachmentId),
+    );
+  }, []);
+
   const handleSendMessage = useCallback(() => {
-    if (!trimmedMessage) {
+    if (!trimmedMessage && pendingImageAttachments.length === 0) {
       return;
     }
 
     dispatch(
       submitAgentMessage({
         message: trimmedMessage,
+        imageDataUris: pendingImageAttachments.map(
+          (attachment) => attachment.dataUri,
+        ),
         runPixel,
         runPixelAsync,
         getPixelAsyncResult,
         getPixelJobStreaming,
       }),
     );
+    setPendingImageAttachments([]);
   }, [
     dispatch,
     runPixel,
     runPixelAsync,
     getPixelAsyncResult,
     getPixelJobStreaming,
+    pendingImageAttachments,
     trimmedMessage,
   ]);
 
@@ -1901,6 +2041,29 @@ export const ChatInterface = () => {
             </div>
           </div>
           <div className="flex items-end gap-2 px-4 pb-3 pt-2">
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleImageInputChange}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              title="Attach image"
+              className={cn(
+                "h-9 w-9 shrink-0 rounded-full border-slate-200/80 bg-white shadow-sm dark:border-white/10 dark:bg-zinc-900",
+                hasPendingImages &&
+                  "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300",
+              )}
+              disabled={isStreaming}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
             <div className="relative flex-1">
               {slashMenu && activeSlashCommand ? (
                 <div className="absolute bottom-full left-0 z-50 mb-2 w-full max-w-xl overflow-hidden rounded-lg border border-slate-200/80 bg-white shadow-xl shadow-slate-900/10 dark:border-white/10 dark:bg-zinc-950">
@@ -1977,6 +2140,43 @@ export const ChatInterface = () => {
                   </div>
                 </div>
               ) : null}
+              {pendingImageAttachments.length > 0 ? (
+                <div className="mb-2 flex max-h-24 flex-wrap gap-2 overflow-y-auto rounded-lg border border-sky-200/70 bg-sky-50/70 p-2 dark:border-sky-500/20 dark:bg-sky-500/10">
+                  {pendingImageAttachments.map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      className="group flex max-w-56 items-center gap-2 rounded-md border border-white/80 bg-white px-2 py-1.5 shadow-sm dark:border-white/10 dark:bg-zinc-900"
+                    >
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-zinc-800">
+                        <img
+                          src={attachment.dataUri}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1 text-xs font-medium text-foreground">
+                          <ImageIcon className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-300" />
+                          <span className="truncate">{attachment.name}</span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          {formatAttachmentSize(attachment.size)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        title="Remove image"
+                        className="ml-auto rounded-full p-1 text-muted-foreground transition hover:bg-slate-100 hover:text-foreground dark:hover:bg-zinc-800"
+                        onClick={() =>
+                          handleRemoveImageAttachment(attachment.id)
+                        }
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               <Textarea
                 placeholder="Type a message...  (/ for commands)"
                 rows={2}
@@ -1984,6 +2184,7 @@ export const ChatInterface = () => {
                 value={inputMessage}
                 onChange={handleMessageChange}
                 onKeyDown={handleMessageKeyDown}
+                onPaste={handleMessagePaste}
                 onSelect={handleInputSelect}
                 className="max-h-60 min-h-[3.25rem] w-full resize-none rounded-lg border-slate-200/80 bg-white text-sm shadow-sm focus-visible:ring-slate-400/30 dark:border-white/10 dark:bg-zinc-900"
               />

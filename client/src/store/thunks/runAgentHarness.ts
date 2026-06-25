@@ -71,6 +71,9 @@ const MAX_LIVE_TOOL_STRING_LENGTH = 240;
 
 const sanitizePixelArg = (value: string) => value.replace(/'/g, '"');
 
+const createStringArrayPixelArg = (values: string[]) =>
+  `[${values.map((value) => JSON.stringify(value)).join(",")}]`;
+
 interface MCPDetails {
   id: string;
   name: string;
@@ -693,6 +696,7 @@ export const runAgentHarness = createAsyncThunk<
     engineId?: string;
     effort?: EffortLevel;
     thinkingEnabled?: boolean;
+    imageDataUris?: string[];
   },
   {
     rejectValue: RunErrorPayload;
@@ -716,6 +720,7 @@ export const runAgentHarness = createAsyncThunk<
       projectId,
       effort,
       thinkingEnabled,
+      imageDataUris = [],
     },
     { rejectWithValue, getState, dispatch },
   ) => {
@@ -790,8 +795,13 @@ export const runAgentHarness = createAsyncThunk<
       const workspaceIdPart = trimmedWorkspaceId
         ? `, workspaceId='${sanitizePixelArg(trimmedWorkspaceId)}'`
         : "";
+      const imagesForThisTurn = imageDataUris.filter(Boolean);
+      const imagePart =
+        imagesForThisTurn.length > 0
+          ? `, image=${createStringArrayPixelArg(imagesForThisTurn)}`
+          : "";
 
-      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='${safeMessage}', harnessType="${chat.harnessType}"${maxTurnsPart}, maxReflections=0, paramValues=[${JSON.stringify(paramMap)}]${workspaceIdPart}) ;`;
+      const pixelString = `RunAgent(roomId='${chat.roomId}', engine='${chat.engineId}', command='${safeMessage}', harnessType="${chat.harnessType}"${maxTurnsPart}, maxReflections=0, paramValues=[${JSON.stringify(paramMap)}]${workspaceIdPart}${imagePart}) ;`;
 
       const { jobId } = await runPixelAsync(pixelString);
 
