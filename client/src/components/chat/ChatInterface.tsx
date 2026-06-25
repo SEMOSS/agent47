@@ -135,6 +135,14 @@ type SkillTab = {
 };
 
 type InspectorTab = "activity" | "issues" | "engines" | "history" | "settings";
+type ActivityGroupName =
+  | "Planning"
+  | "Reading"
+  | "Editing"
+  | "Checks"
+  | "Issues"
+  | "Complete"
+  | "Other";
 
 const PERMISSION_MODE_OPTIONS: Array<{
   value: PermissionMode;
@@ -297,12 +305,13 @@ const summarizeText = (value: string, limit = 180) => {
 };
 
 const getActivityGroup = (event: TranscriptEvent) => {
-  if (event.kind === "user-prompt") return "Goal";
-  if (event.kind === "assistant-text") {
-    return event.display === "intent" ? "Planning" : "Milestone";
+  if (event.kind === "user-prompt" || event.kind === "assistant-text") {
+    return "Planning";
   }
-  if (event.kind === "agent-result") return event.isError ? "Needs attention" : "Complete";
-  if (event.kind === "max-turns-reached") return "Needs attention";
+  if (event.kind === "agent-result") {
+    return event.isError ? "Issues" : "Complete";
+  }
+  if (event.kind === "max-turns-reached") return "Issues";
 
   const toolName =
     event.kind === "tool-invocation" ? event.toolName : event.toolName ?? "";
@@ -317,7 +326,7 @@ const getActivityGroup = (event: TranscriptEvent) => {
     key.includes("search") ||
     key.includes("view")
   ) {
-    return "Reading files";
+    return "Reading";
   }
   if (
     key.includes("write") ||
@@ -335,34 +344,115 @@ const getActivityGroup = (event: TranscriptEvent) => {
     key.includes("build") ||
     key.includes("publish")
   ) {
-    return "Running checks";
+    return "Checks";
   }
-  return "Acting";
+  return "Other";
 };
 
 const getActivityIcon = (event: TranscriptEvent) => {
   const group = getActivityGroup(event);
-  if (group === "Goal") return MessageSquareText;
-  if (group === "Planning" || group === "Milestone") return Sparkles;
-  if (group === "Reading files") return FileSearch;
+  if (event.kind === "user-prompt") return MessageSquareText;
+  if (group === "Planning") return Sparkles;
+  if (group === "Reading") return FileSearch;
   if (group === "Editing") return Pencil;
-  if (group === "Running checks") return Terminal;
+  if (group === "Checks") return Terminal;
   if (group === "Complete") return CheckCircle2;
-  if (group === "Needs attention") return TriangleAlert;
+  if (group === "Issues") return TriangleAlert;
+  return Wrench;
+};
+
+const ACTIVITY_GROUP_LABELS: Record<ActivityGroupName, string> = {
+  Planning: "Planning",
+  Reading: "Reading",
+  Editing: "Editing",
+  Checks: "Checks",
+  Issues: "Issues",
+  Complete: "Complete",
+  Other: "Other",
+};
+
+const ACTIVITY_GROUP_STYLES: Record<
+  ActivityGroupName,
+  {
+    accent: string;
+    header: string;
+    icon: string;
+    text: string;
+    badge: string;
+  }
+> = {
+  Planning: {
+    accent: "bg-sky-500",
+    header: "bg-sky-50/80 dark:bg-sky-950/20",
+    icon: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-300",
+    text: "text-sky-700 dark:text-sky-300",
+    badge: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-300",
+  },
+  Reading: {
+    accent: "bg-indigo-500",
+    header: "bg-indigo-50/80 dark:bg-indigo-950/20",
+    icon: "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-300",
+    text: "text-indigo-700 dark:text-indigo-300",
+    badge: "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-300",
+  },
+  Editing: {
+    accent: "bg-amber-500",
+    header: "bg-amber-50/80 dark:bg-amber-950/20",
+    icon: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-300",
+    text: "text-amber-700 dark:text-amber-300",
+    badge: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-300",
+  },
+  Checks: {
+    accent: "bg-violet-500",
+    header: "bg-violet-50/80 dark:bg-violet-950/20",
+    icon: "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/30 dark:bg-violet-950/30 dark:text-violet-300",
+    text: "text-violet-700 dark:text-violet-300",
+    badge: "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/30 dark:bg-violet-950/30 dark:text-violet-300",
+  },
+  Issues: {
+    accent: "bg-rose-500",
+    header: "bg-rose-50/80 dark:bg-rose-950/20",
+    icon: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-rose-300",
+    text: "text-rose-700 dark:text-rose-300",
+    badge: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-rose-300",
+  },
+  Complete: {
+    accent: "bg-emerald-500",
+    header: "bg-emerald-50/80 dark:bg-emerald-950/20",
+    icon: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-300",
+    text: "text-emerald-700 dark:text-emerald-300",
+    badge: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-300",
+  },
+  Other: {
+    accent: "bg-slate-400",
+    header: "bg-slate-50/80 dark:bg-zinc-900/70",
+    icon: "border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-slate-300",
+    text: "text-slate-600 dark:text-slate-300",
+    badge: "border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-slate-300",
+  },
+};
+
+const getActivityGroupIcon = (group: ActivityGroupName) => {
+  if (group === "Planning") return Sparkles;
+  if (group === "Reading") return FileSearch;
+  if (group === "Editing") return Pencil;
+  if (group === "Checks") return Terminal;
+  if (group === "Issues") return TriangleAlert;
+  if (group === "Complete") return CheckCircle2;
   return Wrench;
 };
 
 const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
   const Icon = getActivityIcon(event);
   const group = getActivityGroup(event);
-  const isWarning = group === "Needs attention";
-  const isComplete = group === "Complete";
+  const styles = ACTIVITY_GROUP_STYLES[group];
 
   let title = group;
   let detail = "";
   let status = "";
 
   if (event.kind === "user-prompt") {
+    title = "Goal";
     detail = summarizeText(event.text);
   } else if (event.kind === "assistant-text") {
     detail = summarizeText(event.text);
@@ -403,12 +493,17 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
   }
 
   return (
-    <div className="group flex min-w-0 items-start gap-2.5 border-b border-slate-200/60 px-3 py-2.5 last:border-b-0 dark:border-white/10">
+    <div className="group relative flex min-w-0 items-start gap-2.5 border-b border-slate-200/60 bg-white px-3 py-2.5 pl-4 last:border-b-0 dark:border-white/10 dark:bg-zinc-950">
       <span
         className={cn(
-          "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border bg-white text-muted-foreground dark:border-white/10 dark:bg-zinc-900",
-          isComplete && "text-emerald-600 dark:text-emerald-400",
-          isWarning && "text-amber-600 dark:text-amber-400",
+          "absolute left-0 top-0 h-full w-0.5 opacity-70",
+          styles.accent,
+        )}
+      />
+      <span
+        className={cn(
+          "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border",
+          styles.icon,
         )}
       >
         <Icon className="h-3.5 w-3.5" />
@@ -419,7 +514,12 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
             {title}
           </span>
           {status ? (
-            <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground dark:bg-zinc-800">
+            <span
+              className={cn(
+                "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                styles.badge,
+              )}
+            >
               {status}
             </span>
           ) : null}
@@ -462,6 +562,113 @@ const ActivityMessageRow = ({ message }: { message: ChatMessage }) => {
       </p>
     </div>
   );
+};
+
+type TimelineItem =
+  | {
+      source: "message";
+      createdAt: number | null;
+      key: string;
+      message: ChatMessage;
+    }
+  | {
+      source: "transcript";
+      createdAt: number | null;
+      key: string;
+      event: TranscriptEvent;
+    };
+
+type ActivityTimelineSection = {
+  id: string;
+  groupName: ActivityGroupName;
+  items: TimelineItem[];
+  latestCreatedAt: number | null;
+  preview: string;
+};
+
+const getTimelineItemActivityGroup = (
+  item: TimelineItem,
+): ActivityGroupName => {
+  if (item.source === "transcript") {
+    return getActivityGroup(item.event);
+  }
+  return item.message.status === "error" ? "Issues" : "Other";
+};
+
+const getTimelineItemPreview = (item: TimelineItem) => {
+  if (item.source === "message") {
+    return summarizeText(item.message.content, 120);
+  }
+
+  const { event } = item;
+  if (event.kind === "user-prompt") return summarizeText(event.text, 120);
+  if (event.kind === "assistant-text") return summarizeText(event.text, 120);
+  if (event.kind === "tool-invocation") {
+    return event.description ?? summarizeArgs(event.arguments);
+  }
+  if (event.kind === "tool-result") {
+    if (event.stats) {
+      return [
+        event.stats.readCount > 0 ? `${event.stats.readCount} reads` : "",
+        event.stats.searchCount > 0 ? `${event.stats.searchCount} searches` : "",
+        event.stats.bashCount > 0 ? `${event.stats.bashCount} commands` : "",
+        event.stats.editFileCount > 0 ? `${event.stats.editFileCount} edits` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    return summarizeText(event.content ?? event.detailedContent ?? "", 120);
+  }
+  if (event.kind === "max-turns-reached") {
+    return `${event.turnCount} of ${event.maxTurns} turns used`;
+  }
+  if (event.kind === "agent-result") {
+    return [
+      typeof event.numTurns === "number" ? `${event.numTurns} turns` : "",
+      typeof event.durationMs === "number"
+        ? `${Math.round(event.durationMs / 1000)}s`
+        : "",
+      event.stopReason ?? "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  return "";
+};
+
+const buildChronologicalActivitySections = (
+  timeline: TimelineItem[],
+): ActivityTimelineSection[] => {
+  const sections: ActivityTimelineSection[] = [];
+
+  for (const item of timeline) {
+    const groupName = getTimelineItemActivityGroup(item);
+    const current = sections[sections.length - 1];
+
+    if (!current || current.groupName !== groupName) {
+      sections.push({
+        id: `${sections.length}-${groupName}-${item.key}`,
+        groupName,
+        items: [item],
+        latestCreatedAt: item.createdAt,
+        preview: getTimelineItemPreview(item),
+      });
+      continue;
+    }
+
+    current.items.push(item);
+    if (
+      item.createdAt !== null &&
+      (current.latestCreatedAt === null || item.createdAt > current.latestCreatedAt)
+    ) {
+      current.latestCreatedAt = item.createdAt;
+    }
+    if (!current.preview) {
+      current.preview = getTimelineItemPreview(item);
+    }
+  }
+
+  return sections;
 };
 
 const MessageBubble = ({
@@ -636,6 +843,9 @@ export const ChatInterface = () => {
   const [isSkillsOpen, setIsSkillsOpen] = useState(false);
   const [isInspectorOpen, setIsInspectorOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<InspectorTab>("activity");
+  const [activitySectionOverrides, setActivitySectionOverrides] = useState<
+    Record<string, boolean>
+  >({});
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isLoadingSkills, setIsLoadingSkills] = useState(false);
   const [skillsError, setSkillsError] = useState<string | null>(null);
@@ -732,6 +942,9 @@ export const ChatInterface = () => {
   const currentStatusText = isStreaming
     ? `${activeHarnessLabel} is working`
     : latestMilestone || "Idle";
+  const composerTone: ActivityGroupName =
+    unseenIssuesCount > 0 ? "Issues" : isStreaming ? "Complete" : "Other";
+  const composerStyles = ACTIVITY_GROUP_STYLES[composerTone];
 
   const slashMenu = useMemo(
     () =>
@@ -793,24 +1006,6 @@ export const ChatInterface = () => {
     [pinnedMcps],
   );
 
-  // Merge non-user legacy chat messages (for example system errors) with
-  // transcript events. User prompts already arrive through the transcript
-  // stream/history for both harnesses, so rendering chat-state user messages
-  // here would duplicate the same bubble.
-  type TimelineItem =
-    | {
-        source: "message";
-        createdAt: number | null;
-        key: string;
-        message: ChatMessage;
-      }
-    | {
-        source: "transcript";
-        createdAt: number | null;
-        key: string;
-        event: (typeof transcriptEvents)[number];
-      };
-
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [];
     for (const message of messages) {
@@ -819,7 +1014,7 @@ export const ChatInterface = () => {
       }
       items.push({
         source: "message",
-        createdAt: message.createdAt ?? 0,
+        createdAt: message.createdAt ?? null,
         key: `msg-${message.id}`,
         message,
       });
@@ -853,6 +1048,21 @@ export const ChatInterface = () => {
       })
       .map(({ item }) => item);
   }, [messages, transcriptEvents]);
+
+  const activitySections = useMemo(
+    () => buildChronologicalActivitySections(timeline),
+    [timeline],
+  );
+
+  const toggleActivitySection = useCallback(
+    (sectionId: string, currentExpanded: boolean) => {
+      setActivitySectionOverrides((current) => ({
+        ...current,
+        [sectionId]: !currentExpanded,
+      }));
+    },
+    [],
+  );
 
   const handleSendMessage = useCallback(() => {
     if (!trimmedMessage) {
@@ -1619,16 +1829,22 @@ export const ChatInterface = () => {
         )}
       >
         <div className="pointer-events-auto overflow-visible border-t border-slate-200/80 bg-white/95 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/95 dark:shadow-black/30">
-          <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-200/70 px-3 py-2 dark:border-white/10">
-            <div className="min-w-0">
+          <div className={cn("h-1", composerStyles.accent)} />
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-200/70 px-4 py-2 dark:border-white/10">
+            <div className="min-w-0 pr-2">
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                <span
+                  className={cn(
+                    "text-[10px] font-semibold uppercase tracking-[0.18em]",
+                    composerStyles.text,
+                  )}
+                >
                   Current goal
                 </span>
                 <span
                   className={cn(
                     "h-1.5 w-1.5 shrink-0 rounded-full",
-                    isStreaming ? "bg-emerald-500" : "bg-slate-300",
+                    composerStyles.accent,
                   )}
                 />
                 <span className="truncate text-xs text-muted-foreground">
@@ -1642,14 +1858,14 @@ export const ChatInterface = () => {
             <div className="flex shrink-0 items-center gap-1.5">
               <Badge
                 variant="outline"
-                className="hidden h-7 gap-1 px-2 sm:flex"
+                className={cn("hidden h-7 gap-1 px-2 xl:flex", composerStyles.badge)}
               >
                 <Bot className="h-3.5 w-3.5" />
                 {activeHarnessLabel}
               </Badge>
               <Badge
                 variant="outline"
-                className="hidden h-7 px-2 text-[11px] sm:flex"
+                className="hidden h-7 px-2 text-[11px] xl:flex"
               >
                 {toTitleCase(permissionMode)}
               </Badge>
@@ -1672,7 +1888,7 @@ export const ChatInterface = () => {
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-7 gap-1.5 px-2 text-xs"
+                className="h-7 gap-1.5 border-slate-200/80 bg-white px-2 text-xs shadow-sm dark:border-white/10 dark:bg-zinc-900"
                 onClick={() => setIsInspectorOpen((value) => !value)}
               >
                 {isInspectorOpen ? (
@@ -1684,7 +1900,7 @@ export const ChatInterface = () => {
               </Button>
             </div>
           </div>
-          <div className="flex items-end gap-2 px-3 pb-3 pt-2">
+          <div className="flex items-end gap-2 px-4 pb-3 pt-2">
             <div className="relative flex-1">
               {slashMenu && activeSlashCommand ? (
                 <div className="absolute bottom-full left-0 z-50 mb-2 w-full max-w-xl overflow-hidden rounded-lg border border-slate-200/80 bg-white shadow-xl shadow-slate-900/10 dark:border-white/10 dark:bg-zinc-950">
@@ -1769,7 +1985,7 @@ export const ChatInterface = () => {
                 onChange={handleMessageChange}
                 onKeyDown={handleMessageKeyDown}
                 onSelect={handleInputSelect}
-                className="max-h-60 min-h-[3.25rem] w-full resize-none border-slate-200/80 bg-white text-sm shadow-sm focus-visible:ring-slate-400/30 dark:border-white/10 dark:bg-zinc-900"
+                className="max-h-60 min-h-[3.25rem] w-full resize-none rounded-lg border-slate-200/80 bg-white text-sm shadow-sm focus-visible:ring-slate-400/30 dark:border-white/10 dark:bg-zinc-900"
               />
             </div>
             <Button
@@ -1791,10 +2007,15 @@ export const ChatInterface = () => {
           onValueChange={(value) => setActiveTab(value as InspectorTab)}
           className="flex h-full min-h-0 flex-col"
         >
-          <header className="border-b border-slate-200/80 bg-slate-50/80 dark:border-white/10 dark:bg-zinc-900/80">
+          <header className="border-b border-slate-200/80 bg-gradient-to-b from-slate-50 to-white dark:border-white/10 dark:from-zinc-900 dark:to-zinc-950">
             <div className="flex items-center justify-between gap-3 px-3 py-2">
               <div className="flex min-w-0 items-center gap-2">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-muted-foreground dark:border-white/10 dark:bg-zinc-950">
+                <span
+                  className={cn(
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
+                    composerStyles.icon,
+                  )}
+                >
                   <Activity className="h-3.5 w-3.5" />
                 </span>
                 <div className="min-w-0">
@@ -1827,11 +2048,17 @@ export const ChatInterface = () => {
               </div>
             </div>
             <TabsList className="grid h-9 w-full grid-cols-5 rounded-none border-t border-slate-200/80 bg-transparent p-1 dark:border-white/10">
-              <TabsTrigger value="activity" className="gap-1 px-1 text-xs">
+              <TabsTrigger
+                value="activity"
+                className="gap-1 px-1 text-xs data-[state=active]:bg-sky-50 data-[state=active]:text-sky-700 dark:data-[state=active]:bg-sky-950/30 dark:data-[state=active]:text-sky-300"
+              >
                 <Activity className="h-3.5 w-3.5" />
                 Activity
               </TabsTrigger>
-              <TabsTrigger value="issues" className="gap-1 px-1 text-xs">
+              <TabsTrigger
+                value="issues"
+                className="gap-1 px-1 text-xs data-[state=active]:bg-rose-50 data-[state=active]:text-rose-700 dark:data-[state=active]:bg-rose-950/30 dark:data-[state=active]:text-rose-300"
+              >
                 <TriangleAlert className="h-3.5 w-3.5" />
                 <span>Issues</span>
                 {unseenIssuesCount > 0 ? (
@@ -1843,15 +2070,24 @@ export const ChatInterface = () => {
                   </Badge>
                 ) : null}
               </TabsTrigger>
-              <TabsTrigger value="engines" className="gap-1 px-1 text-xs">
+              <TabsTrigger
+                value="engines"
+                className="gap-1 px-1 text-xs data-[state=active]:bg-violet-50 data-[state=active]:text-violet-700 dark:data-[state=active]:bg-violet-950/30 dark:data-[state=active]:text-violet-300"
+              >
                 <Terminal className="h-3.5 w-3.5" />
                 Engines
               </TabsTrigger>
-              <TabsTrigger value="history" className="gap-1 px-1 text-xs">
+              <TabsTrigger
+                value="history"
+                className="gap-1 px-1 text-xs data-[state=active]:bg-indigo-50 data-[state=active]:text-indigo-700 dark:data-[state=active]:bg-indigo-950/30 dark:data-[state=active]:text-indigo-300"
+              >
                 <BookOpen className="h-3.5 w-3.5" />
                 History
               </TabsTrigger>
-              <TabsTrigger value="settings" className="gap-1 px-1 text-xs">
+              <TabsTrigger
+                value="settings"
+                className="gap-1 px-1 text-xs data-[state=active]:bg-amber-50 data-[state=active]:text-amber-700 dark:data-[state=active]:bg-amber-950/30 dark:data-[state=active]:text-amber-300"
+              >
                 <Settings className="h-3.5 w-3.5" />
                 Agent
               </TabsTrigger>
@@ -1878,7 +2114,7 @@ export const ChatInterface = () => {
             </div>
             <div
               ref={messagesContainerRef}
-              className="min-h-0 flex-1 overflow-y-auto"
+              className="min-h-0 flex-1 overflow-y-auto bg-slate-50/60 p-2 dark:bg-zinc-950"
             >
               {messages.length === 0 && transcriptEvents.length === 0 ? (
                 <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
@@ -1896,20 +2132,111 @@ export const ChatInterface = () => {
                 </div>
               ) : (
                 <>
-                  {timeline.map((item) =>
-                    item.source === "message" ? (
-                      <ActivityMessageRow key={item.key} message={item.message} />
-                    ) : (
-                      <ActivityEventRow key={item.key} event={item.event} />
-                    ),
-                  )}
+                  <div className="space-y-2">
+                    {activitySections.map((section, sectionIndex) => {
+                      const styles = ACTIVITY_GROUP_STYLES[section.groupName];
+                      const Icon = getActivityGroupIcon(section.groupName);
+                      const defaultExpanded =
+                        section.groupName !== "Planning" ||
+                        section.items.length === 1;
+                      const isExpanded =
+                        activitySectionOverrides[section.id] ?? defaultExpanded;
+                      const latestTime =
+                        section.latestCreatedAt === null
+                          ? ""
+                          : formatTimestamp(
+                              new Date(section.latestCreatedAt).toISOString(),
+                            );
+
+                      return (
+                        <section
+                          key={section.id}
+                          className="overflow-hidden rounded-lg border border-slate-200/70 bg-white shadow-sm dark:border-white/10 dark:bg-zinc-950"
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleActivitySection(section.id, isExpanded)
+                            }
+                            className={cn(
+                              "relative flex w-full items-center gap-2 px-3 py-2 text-left transition-colors",
+                              styles.header,
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "absolute left-0 top-0 h-full w-0.5",
+                                styles.accent,
+                              )}
+                            />
+                            <span
+                              className={cn(
+                                "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
+                                styles.icon,
+                              )}
+                            >
+                              <Icon className="h-3.5 w-3.5" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-semibold text-foreground">
+                                {sectionIndex + 1}.{" "}
+                                {ACTIVITY_GROUP_LABELS[section.groupName]}
+                              </span>
+                              <span className="block truncate text-[11px] text-muted-foreground">
+                                {isExpanded
+                                  ? `${section.items.length} event${
+                                      section.items.length === 1 ? "" : "s"
+                                    } in this step`
+                                  : section.preview || "Collapsed activity"}
+                              </span>
+                            </span>
+                            <span
+                              className={cn(
+                                "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+                                styles.badge,
+                              )}
+                            >
+                              {section.items.length}
+                            </span>
+                            {latestTime ? (
+                              <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 sm:inline">
+                                {latestTime}
+                              </span>
+                            ) : null}
+                            {isExpanded ? (
+                              <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            )}
+                          </button>
+                          {isExpanded ? (
+                            <div className="border-t border-slate-200/70 dark:border-white/10">
+                              {section.items.map((item) =>
+                                item.source === "message" ? (
+                                  <ActivityMessageRow
+                                    key={item.key}
+                                    message={item.message}
+                                  />
+                                ) : (
+                                  <ActivityEventRow
+                                    key={item.key}
+                                    event={item.event}
+                                  />
+                                ),
+                              )}
+                            </div>
+                          ) : null}
+                        </section>
+                      );
+                    })}
+                  </div>
                   {isStreaming ? (
-                    <div className="flex items-center gap-2 border-t border-slate-200/70 px-3 py-2.5 text-xs text-muted-foreground dark:border-white/10">
+                    <div className="mt-2 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/20 dark:text-emerald-300">
                       <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
                       <span>{activeHarnessLabel} is working...</span>
                     </div>
                   ) : (
-                    <div className="border-t border-slate-200/70 px-3 py-2.5 dark:border-white/10">
+                    <div className="mt-2 rounded-lg border border-slate-200/70 bg-white px-3 py-2.5 dark:border-white/10 dark:bg-zinc-950">
                       <LatestCommitChip
                         onOpenHistory={() => setActiveTab("history")}
                       />
