@@ -19,7 +19,24 @@ export type TranscriptMessage = {
     promptId?: string;
 };
 
-export type UserPrompt = {
+export type TranscriptReference = {
+    path: string;
+    label?: string;
+    kind?: "file" | "directory" | "url";
+    startLine?: number;
+    endLine?: number;
+};
+
+export type TranscriptEventMeta = {
+    turnId?: string;
+    references?: TranscriptReference[];
+    command?: string;
+    displayName?: string;
+    startedAt?: string;
+    completedAt?: string;
+};
+
+export type UserPrompt = TranscriptEventMeta & {
     kind: "user-prompt";
     promptId: string;
     text: string;
@@ -27,7 +44,7 @@ export type UserPrompt = {
     harnessType?: TranscriptHarness;
 };
 
-export type ToolInvocation = {
+export type ToolInvocation = TranscriptEventMeta & {
     kind: "tool-invocation";
     toolUseId: string;
     eventId?: string;
@@ -41,7 +58,7 @@ export type ToolInvocation = {
     harnessType?: TranscriptHarness;
 };
 
-export type AssistantText = {
+export type AssistantText = TranscriptEventMeta & {
     kind: "assistant-text";
     eventId?: string;
     text: string;
@@ -62,7 +79,7 @@ export type ToolStats = {
     linesRemoved: number;
 };
 
-export type ToolResult = {
+export type ToolResult = TranscriptEventMeta & {
     kind: "tool-result";
     toolUseId: string;
     eventId?: string;
@@ -80,7 +97,36 @@ export type ToolResult = {
     harnessType?: TranscriptHarness;
 };
 
-export type MaxTurnsReached = {
+export type ApprovalRequested = TranscriptEventMeta & {
+    kind: "approval-requested";
+    approvalId: string;
+    title?: string;
+    description?: string;
+    reason?: string;
+    action?: string;
+    status?: "pending" | "approved" | "rejected";
+    timestamp: string;
+    harnessType?: TranscriptHarness;
+};
+
+export type ApprovalResolved = TranscriptEventMeta & {
+    kind: "approval-resolved";
+    approvalId: string;
+    status: "approved" | "rejected";
+    timestamp: string;
+    harnessType?: TranscriptHarness;
+};
+
+export type CheckpointCreated = TranscriptEventMeta & {
+    kind: "checkpoint-created";
+    checkpointId: string;
+    title?: string;
+    description?: string;
+    timestamp: string;
+    harnessType?: TranscriptHarness;
+};
+
+export type MaxTurnsReached = TranscriptEventMeta & {
     kind: "max-turns-reached";
     uuid: string;
     sessionId?: string;
@@ -90,7 +136,7 @@ export type MaxTurnsReached = {
     harnessType?: TranscriptHarness;
 };
 
-export type AgentResult = {
+export type AgentResult = TranscriptEventMeta & {
     kind: "agent-result";
     uuid: string;
     sessionId?: string;
@@ -110,6 +156,9 @@ export type TranscriptEvent =
     | ToolInvocation
     | AssistantText
     | ToolResult
+    | ApprovalRequested
+    | ApprovalResolved
+    | CheckpointCreated
     | MaxTurnsReached
     | AgentResult;
 
@@ -132,6 +181,18 @@ export const getTranscriptEventStableKey = (
         case "tool-result":
             return event.toolUseId
                 ? `tool-result:${event.toolUseId}`
+                : null;
+        case "approval-requested":
+            return event.approvalId
+                ? `approval-requested:${event.approvalId}`
+                : null;
+        case "approval-resolved":
+            return event.approvalId
+                ? `approval-resolved:${event.approvalId}`
+                : null;
+        case "checkpoint-created":
+            return event.checkpointId
+                ? `checkpoint-created:${event.checkpointId}`
                 : null;
         case "max-turns-reached":
             return event.uuid

@@ -129,7 +129,6 @@ const mergeTranscriptEvent = (
             };
         case "tool-invocation":
             return {
-                ...existing,
                 ...incoming,
                 arguments:
                     incoming.arguments ??
@@ -139,14 +138,27 @@ const mergeTranscriptEvent = (
                 timestamp,
             };
         case "tool-result":
+            return existing.kind === "tool-result"
+                ? {
+                      ...existing,
+                      ...incoming,
+                      timestamp,
+                  }
+                : {
+                      ...incoming,
+                      timestamp,
+                  };
+        case "user-prompt":
             return {
-                ...existing,
                 ...incoming,
                 timestamp,
             };
-        case "user-prompt":
+        case "approval-requested":
+        case "approval-resolved":
+        case "checkpoint-created":
+        case "max-turns-reached":
+        case "agent-result":
             return {
-                ...existing,
                 ...incoming,
                 timestamp,
             };

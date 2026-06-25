@@ -17,6 +17,7 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  RotateCcw,
   Search,
   Settings,
   SquarePen,
@@ -131,6 +132,7 @@ import { submitAgentMessage } from "@/store/thunks/submitAgentMessage";
 import {
   getTranscriptEventStableKey,
   type TranscriptEvent,
+  type TranscriptReference,
 } from "@/types/transcript";
 
 type SkillTab = {
@@ -352,6 +354,23 @@ const formatTimestamp = (timestamp?: string) => {
   return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 };
 
+const formatShortDuration = (ms: number) => {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0
+    ? `${minutes}m ${remainingSeconds}s`
+    : `${minutes}m`;
+};
+
+const shortenPath = (path: string, maxParts = 3) => {
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (parts.length <= maxParts) return path;
+  return `.../${parts.slice(-maxParts).join("/")}`;
+};
+
 const stripToolEnginePrefix = (toolName?: string) =>
   (toolName ?? "").trim().replace(TOOL_ENGINE_PREFIX_RE, "");
 
@@ -475,6 +494,96 @@ const summarizeToolOutput = (value?: string, limit = 180) => {
   return summarizeText(stripReadLineNumbers(value), limit);
 };
 
+const isAssistantThinkingEvent = (event: TranscriptEvent) =>
+  event.kind === "assistant-text" &&
+  (event.display === "intent" || Boolean(event.parentToolUseId));
+
+const getSemanticActivityLabel = (event: TranscriptEvent) => {
+  if (event.kind === "assistant-text") {
+    return isAssistantThinkingEvent(event) ? "Thinking" : "Answer";
+  }
+  if (event.kind === "user-prompt") return "Goal";
+  if (event.kind === "approval-requested") return "Approval needed";
+  if (event.kind === "approval-resolved") return "Approval resolved";
+  if (event.kind === "checkpoint-created") return "Checkpoint";
+  if (event.kind === "agent-result") return event.isError ? "Issue" : "Complete";
+  if (event.kind === "max-turns-reached") return "Issue";
+
+  const toolName =
+    event.kind === "tool-invocation" ? event.toolName : event.toolName ?? "";
+  const key = getToolKey(toolName);
+
+  if (key.includes("build") || key.includes("publish")) return "Build/publish";
+  if (key.includes("grep") || key.includes("glob") || key.includes("search")) {
+    return "Search files";
+  }
+  if (key.includes("read") || key.includes("view")) return "Read file";
+  if (
+    key.includes("write") ||
+    key.includes("edit") ||
+    key.includes("save") ||
+    key.includes("commit") ||
+    key.includes("patch")
+  ) {
+    return "Edit file";
+  }
+  if (key.includes("bash") || key.includes("command") || key.includes("test")) {
+    return "Bash";
+  }
+  return cleanActivityTitle(event.displayName ?? event.title ?? getToolDisplayName(toolName));
+};
+
+const coerceReferenceLine = (value: unknown): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+};
+
+const getLineRangeReference = (
+  path: string,
+  args?: Record<string, unknown>,
+): TranscriptReference => {
+  const startLine = coerceReferenceLine(
+    getRecordValue(args, ["offset", "start", "line", "startLine"]),
+  );
+  const limit = coerceReferenceLine(getRecordValue(args, ["limit"]));
+  const endLine =
+    startLine && limit ? startLine + Math.max(0, limit - 1) : undefined;
+  return { path, startLine, endLine };
+};
+
+const getEventReferences = (event: TranscriptEvent): TranscriptReference[] => {
+  const refs = [...(event.references ?? [])];
+  if (event.kind === "tool-result" && event.filePath) {
+    refs.push(getLineRangeReference(event.filePath, event.toolParameterValues));
+  }
+  if (event.kind === "tool-invocation" || event.kind === "tool-result") {
+    const args =
+      event.kind === "tool-invocation"
+        ? event.arguments
+        : event.toolParameterValues;
+    const path = getRecordValue(args, ["file_path", "filePath", "path"]);
+    if (typeof path === "string" && path.trim()) {
+      refs.push(getLineRangeReference(path.trim(), args));
+    }
+  }
+
+  const seen = new Set<string>();
+  return refs.filter((ref) => {
+    const key = `${ref.path}:${ref.startLine ?? ""}:${ref.endLine ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const formatReferenceLineRange = (ref: TranscriptReference) => {
+  if (!ref.startLine) return "";
+  if (ref.endLine && ref.endLine !== ref.startLine) {
+    return `lines ${ref.startLine}-${ref.endLine}`;
+  }
+  return `line ${ref.startLine}`;
+};
+
 type RawDetailBlock = {
   label?: string;
   value: string;
@@ -519,7 +628,7 @@ const cleanThinkingDetail = (value: string) =>
 
 const getAssistantThoughtParts = (text: string) => {
   const trimmed = text.trim();
-  const headingMatch = trimmed.match(/^\*\*([^*]+)\*\*\s*(.*)$/s);
+  const headingMatch = trimmed.match(/^\*\*([^*]+)\*\*\s*([\s\S]*)$/);
 
   if (headingMatch) {
     return {
@@ -544,14 +653,19 @@ const getAssistantThoughtFullText = (text: string) => {
 const getActivityEventTitle = (event: TranscriptEvent) => {
   if (event.kind === "user-prompt") return "Goal";
   if (event.kind === "assistant-text") {
-    return getAssistantThoughtParts(event.text).title;
+    return isAssistantThinkingEvent(event)
+      ? getAssistantThoughtParts(event.text).title
+      : "Answer";
   }
   if (event.kind === "tool-invocation") {
-    return cleanActivityTitle(event.title ?? getToolDisplayName(event.toolName));
+    return getSemanticActivityLabel(event);
   }
   if (event.kind === "tool-result") {
-    return cleanActivityTitle(event.title ?? getToolDisplayName(event.toolName));
+    return getSemanticActivityLabel(event);
   }
+  if (event.kind === "approval-requested") return "Approval needed";
+  if (event.kind === "approval-resolved") return "Approval resolved";
+  if (event.kind === "checkpoint-created") return "Checkpoint";
   if (event.kind === "max-turns-reached") return "Turn Limit";
   if (event.kind === "agent-result") return event.isError ? "Issue" : "Done";
   return "Activity";
@@ -560,7 +674,9 @@ const getActivityEventTitle = (event: TranscriptEvent) => {
 const getActivityEventDetail = (event: TranscriptEvent) => {
   if (event.kind === "user-prompt") return summarizeText(event.text);
   if (event.kind === "assistant-text") {
-    return summarizeText(getAssistantThoughtParts(event.text).detail);
+    return isAssistantThinkingEvent(event)
+      ? summarizeText(getAssistantThoughtParts(event.text).detail)
+      : summarizeText(event.text, 220);
   }
   if (event.kind === "tool-invocation") {
     return event.description ?? summarizeArgs(event.arguments);
@@ -590,25 +706,73 @@ const getActivityEventDetail = (event: TranscriptEvent) => {
       .filter(Boolean)
       .join(" - ");
   }
+  if (event.kind === "approval-requested") {
+    return (
+      event.reason ??
+      event.description ??
+      event.command ??
+      summarizeText(event.title ?? "Review the requested action.")
+    );
+  }
+  if (event.kind === "approval-resolved") {
+    return event.status === "approved" ? "Approved" : "Rejected";
+  }
+  if (event.kind === "checkpoint-created") {
+    return event.description ?? event.checkpointId;
+  }
   return "";
 };
 
 const getActivityEventRawDetails = (event: TranscriptEvent): RawDetailBlock[] => {
   if (event.kind === "assistant-text") {
-    const value = getAssistantThoughtFullText(event.text);
+    const value = isAssistantThinkingEvent(event)
+      ? getAssistantThoughtFullText(event.text)
+      : event.text;
     return value ? [{ value, variant: "text" }] : [];
   }
   if (event.kind === "tool-invocation") {
     const args = prettyPrintRecord(event.arguments);
-    return args ? [{ label: "Call", value: args }] : [];
+    return args ? [{ label: "IN", value: args }] : [];
   }
   if (event.kind === "tool-result") {
     const blocks: RawDetailBlock[] = [];
     const params = prettyPrintRecord(event.toolParameterValues);
-    if (params) blocks.push({ label: "Inputs", value: params });
+    if (params) blocks.push({ label: "IN", value: params });
     const output = event.detailedContent ?? event.content;
-    if (output) blocks.push({ label: "Output", value: stripReadLineNumbers(output) });
+    if (output) blocks.push({ label: "OUT", value: stripReadLineNumbers(output) });
+    if (event.status && event.status.toLowerCase() === "error") {
+      blocks.push({ label: "ERROR", value: event.status, variant: "text" });
+    }
     return blocks;
+  }
+  if (event.kind === "approval-requested") {
+    return [
+      event.command ? { label: "IN", value: event.command } : null,
+      event.reason ? { label: "Reason", value: event.reason, variant: "text" } : null,
+    ].filter(Boolean) as RawDetailBlock[];
+  }
+  if (event.kind === "checkpoint-created") {
+    return event.checkpointId
+      ? [{ label: "Checkpoint", value: event.checkpointId }]
+      : [];
+  }
+  if (event.kind === "agent-result" && event.errors?.length) {
+    return [{ label: "ERROR", value: event.errors.join("\n"), variant: "text" }];
+  }
+  if (event.kind === "max-turns-reached") {
+    return [
+      {
+        label: "Limit",
+        value: `${event.turnCount} of ${event.maxTurns} turns used`,
+        variant: "text",
+      },
+    ];
+  }
+  if (event.kind === "approval-resolved") {
+    return [{ label: "Status", value: event.status, variant: "text" }];
+  }
+  if (event.kind === "user-prompt") {
+    return event.text ? [{ label: "Goal", value: event.text, variant: "text" }] : [];
   }
   return [];
 };
@@ -634,12 +798,17 @@ const getActivityGroup = (event: TranscriptEvent) => {
     return "Goal";
   }
   if (event.kind === "assistant-text") {
-    return "Thinking";
+    return isAssistantThinkingEvent(event) ? "Thinking" : "Complete";
   }
   if (event.kind === "agent-result") {
     return event.isError ? "Issues" : "Complete";
   }
   if (event.kind === "max-turns-reached") return "Issues";
+  if (event.kind === "approval-requested") return "Checks";
+  if (event.kind === "approval-resolved") {
+    return event.status === "approved" ? "Complete" : "Issues";
+  }
+  if (event.kind === "checkpoint-created") return "Complete";
 
   const toolName =
     event.kind === "tool-invocation" ? event.toolName : event.toolName ?? "";
@@ -678,6 +847,9 @@ const getActivityGroup = (event: TranscriptEvent) => {
 const getActivityIcon = (event: TranscriptEvent) => {
   const group = getActivityGroup(event);
   if (event.kind === "user-prompt") return MessageSquareText;
+  if (event.kind === "approval-requested") return TriangleAlert;
+  if (event.kind === "approval-resolved") return CheckCircle2;
+  if (event.kind === "checkpoint-created") return RotateCcw;
   if (group === "Thinking") return Brain;
   if (group === "Reading") return FileSearch;
   if (group === "Editing") return Pencil;
@@ -685,17 +857,6 @@ const getActivityIcon = (event: TranscriptEvent) => {
   if (group === "Complete") return CheckCircle2;
   if (group === "Issues") return TriangleAlert;
   return Wrench;
-};
-
-const ACTIVITY_GROUP_LABELS: Record<ActivityGroupName, string> = {
-  Goal: "Goal",
-  Thinking: "Thinking",
-  Reading: "Reading",
-  Editing: "Editing",
-  Checks: "Checks",
-  Issues: "Issues",
-  Complete: "Complete",
-  Other: "Other",
 };
 
 const ACTIVITY_GROUP_STYLES: Record<
@@ -766,15 +927,36 @@ const ACTIVITY_GROUP_STYLES: Record<
   },
 };
 
-const getActivityGroupIcon = (group: ActivityGroupName) => {
-  if (group === "Goal") return MessageSquareText;
-  if (group === "Thinking") return Brain;
-  if (group === "Reading") return FileSearch;
-  if (group === "Editing") return Pencil;
-  if (group === "Checks") return Terminal;
-  if (group === "Issues") return TriangleAlert;
-  if (group === "Complete") return CheckCircle2;
-  return Wrench;
+const FileReferenceChips = ({ refs }: { refs: TranscriptReference[] }) => {
+  if (refs.length === 0) return null;
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {refs.slice(0, 4).map((ref) => {
+        const lineRange = formatReferenceLineRange(ref);
+        return (
+          <span
+            key={`${ref.path}-${lineRange}`}
+            className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300"
+            title={[ref.path, lineRange].filter(Boolean).join(" - ")}
+          >
+            <FileSearch className="h-3 w-3 shrink-0" />
+            <span className="truncate">{ref.label ?? shortenPath(ref.path)}</span>
+            {lineRange ? (
+              <span className="shrink-0 text-muted-foreground">
+                {lineRange}
+              </span>
+            ) : null}
+          </span>
+        );
+      })}
+      {refs.length > 4 ? (
+        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-muted-foreground dark:bg-zinc-900">
+          +{refs.length - 4} more
+        </span>
+      ) : null}
+    </div>
+  );
 };
 
 const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
@@ -782,24 +964,42 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
   const Icon = getActivityIcon(event);
   const group = getActivityGroup(event);
   const styles = ACTIVITY_GROUP_STYLES[group];
-  const title = getActivityEventTitle(event);
+  const label = getSemanticActivityLabel(event);
+  const title = cleanActivityTitle(
+    event.displayName ?? getActivityEventTitle(event),
+  );
   const detail = getActivityEventDetail(event);
   const rawDetails = getActivityEventRawDetails(event);
-  const isGenericLabelRow =
-    (group === "Thinking" && title === "Thinking") ||
-    (group === "Goal" && title === "Goal");
-  const primaryText = isGenericLabelRow ? detail || title : title;
-  const secondaryText = isGenericLabelRow ? "" : detail;
+  const references = getEventReferences(event);
+  const isAnswer =
+    event.kind === "assistant-text" && !isAssistantThinkingEvent(event);
+  const primaryText =
+    group === "Thinking" && title === "Thinking" ? detail || title : title;
+  const secondaryText =
+    group === "Thinking" && title === "Thinking" ? "" : detail;
   const status =
     event.kind === "tool-invocation"
       ? getVisibleStatus(event.status)
       : event.kind === "tool-result"
         ? getVisibleStatus(event.status)
+        : event.kind === "approval-requested"
+          ? event.status ?? "pending"
+          : event.kind === "approval-resolved"
+            ? event.status
+            : "";
+  const duration =
+    event.kind === "tool-result" && event.durationMs
+      ? formatShortDuration(event.durationMs)
+      : event.kind === "agent-result" && event.durationMs
+        ? formatShortDuration(event.durationMs)
         : "";
   const hasRawDetails = rawDetails.length > 0;
+  const handleUnavailableAction = (label: string) => {
+    toast.info(`${label} will be available when the harness emits an action.`);
+  };
 
   return (
-    <div className="group relative flex min-w-0 items-start gap-2.5 border-b border-slate-200/60 bg-white px-3 py-2.5 last:border-b-0 dark:border-white/10 dark:bg-zinc-950">
+    <div className="group relative flex min-w-0 items-start gap-2.5 border-b border-slate-200/60 bg-white px-3 py-3 last:border-b-0 dark:border-white/10 dark:bg-zinc-950">
       <span
         className={cn(
           "absolute left-0 top-0 h-full w-px opacity-60",
@@ -815,16 +1015,20 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
         <Icon className="h-3.5 w-3.5" />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <span
-            className={cn(
-              isGenericLabelRow
-                ? "line-clamp-3 whitespace-normal text-xs font-normal leading-relaxed text-muted-foreground"
-                : "truncate text-sm font-medium text-foreground",
-            )}
-          >
-            {primaryText}
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span className={cn("text-xs font-semibold", styles.text)}>
+            {label}
           </span>
+          {primaryText && primaryText !== label ? (
+            <span className="min-w-0 truncate text-sm font-medium text-foreground">
+              {primaryText}
+            </span>
+          ) : null}
+          {duration ? (
+            <span className="shrink-0 text-[11px] text-muted-foreground">
+              {duration}
+            </span>
+          ) : null}
           {status ? (
             <span
               className={cn(
@@ -836,10 +1040,43 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
             </span>
           ) : null}
         </div>
-        {secondaryText ? (
-          <p className="mt-0.5 line-clamp-3 text-xs leading-snug text-muted-foreground">
-            {secondaryText}
+        {isAnswer ? (
+          <div className="mt-1.5 rounded-md border border-slate-200/70 bg-slate-50/70 px-3 py-2 text-sm leading-relaxed dark:border-white/10 dark:bg-zinc-900/60">
+            <MarkdownRenderer content={event.text} />
+          </div>
+        ) : secondaryText || (!primaryText && detail) ? (
+          <p className="mt-1 line-clamp-3 text-xs leading-snug text-muted-foreground">
+            {secondaryText || detail}
           </p>
+        ) : null}
+        <FileReferenceChips refs={references} />
+        {event.kind === "approval-requested" ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {["Allow once", "Allow for project", "Reject"].map((label) => (
+              <Button
+                key={label}
+                type="button"
+                variant={label === "Reject" ? "outline" : "default"}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => handleUnavailableAction(label)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        ) : null}
+        {event.kind === "checkpoint-created" ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2 h-7 gap-1.5 px-2 text-xs"
+            onClick={() => handleUnavailableAction("Restore checkpoint")}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Restore checkpoint
+          </Button>
         ) : null}
         {isDetailOpen ? (
           <div className="mt-2 space-y-2 rounded-md border border-slate-200/70 bg-slate-50/80 p-2 dark:border-white/10 dark:bg-zinc-900/70">
@@ -930,35 +1167,21 @@ type TimelineItem =
       event: TranscriptEvent;
     };
 
-type ActivityTimelineSection = {
+type TurnTimeline = {
   id: string;
-  groupName: ActivityGroupName;
+  turnId?: string;
+  goal?: string;
+  promptTime: number | null;
+  startedAt: number | null;
+  completedAt: number | null;
   items: TimelineItem[];
-  latestCreatedAt: number | null;
-  preview: string;
+  result?: Extract<TranscriptEvent, { kind: "agent-result" }>;
 };
 
 type CurrentWorkSummary = {
   title: string;
   detail: string;
   groupName: ActivityGroupName;
-};
-
-const getTimelineItemActivityGroup = (
-  item: TimelineItem,
-): ActivityGroupName => {
-  if (item.source === "transcript") {
-    return getActivityGroup(item.event);
-  }
-  return item.message.status === "error" ? "Issues" : "Other";
-};
-
-const getTimelineItemPreview = (item: TimelineItem) => {
-  if (item.source === "message") {
-    return summarizeText(item.message.content, 120);
-  }
-
-  return summarizeText(getActivityEventDetail(item.event), 120);
 };
 
 const getCurrentWorkSummaryFromEvent = (
@@ -1008,72 +1231,200 @@ const getCurrentWorkSummaryFromEvent = (
   return null;
 };
 
-const buildChronologicalActivitySections = (
+const getTimelineItemTurnId = (item: TimelineItem): string | undefined =>
+  item.source === "transcript" ? item.event.turnId : undefined;
+
+const getTimelineItemResult = (
+  item: TimelineItem,
+): Extract<TranscriptEvent, { kind: "agent-result" }> | undefined =>
+  item.source === "transcript" && item.event.kind === "agent-result"
+    ? item.event
+    : undefined;
+
+const buildTurnTimeline = (
   timeline: TimelineItem[],
-): ActivityTimelineSection[] => {
-  const sections: ActivityTimelineSection[] = [];
+): TurnTimeline[] => {
+  const turns: TurnTimeline[] = [];
+  let currentTurn: TurnTimeline | null = null;
+
+  const startTurn = (
+    seed: TimelineItem,
+    goal?: string,
+    turnId?: string,
+  ): TurnTimeline => {
+    const timestamp = seed.createdAt;
+    const nextTurn: TurnTimeline = {
+      id: `turn-${turns.length}-${turnId ?? seed.key}`,
+      turnId,
+      goal,
+      promptTime: goal ? timestamp : null,
+      startedAt: timestamp,
+      completedAt: null,
+      items: [],
+    };
+    turns.push(nextTurn);
+    currentTurn = nextTurn;
+    return nextTurn;
+  };
 
   for (const item of timeline) {
-    const groupName = getTimelineItemActivityGroup(item);
-    const current = sections[sections.length - 1];
-
-    if (!current || current.groupName !== groupName) {
-      sections.push({
-        id: `${sections.length}-${groupName}-${item.key}`,
-        groupName,
-        items: [item],
-        latestCreatedAt: item.createdAt,
-        preview: getTimelineItemPreview(item),
-      });
+    if (item.source === "transcript" && item.event.kind === "user-prompt") {
+      startTurn(item, item.event.text, item.event.turnId ?? item.event.promptId);
       continue;
     }
 
-    current.items.push(item);
+    const itemTurnId = getTimelineItemTurnId(item);
     if (
-      item.createdAt !== null &&
-      (current.latestCreatedAt === null || item.createdAt > current.latestCreatedAt)
+      !currentTurn ||
+      (itemTurnId && currentTurn.turnId && currentTurn.turnId !== itemTurnId)
     ) {
-      current.latestCreatedAt = item.createdAt;
+      currentTurn = startTurn(item, undefined, itemTurnId);
+    } else if (itemTurnId && !currentTurn.turnId) {
+      currentTurn.turnId = itemTurnId;
     }
-    const preview = getTimelineItemPreview(item);
-    if (preview) {
-      current.preview = preview;
+
+    currentTurn.items.push(item);
+    if (item.createdAt !== null) {
+      if (currentTurn.startedAt === null || item.createdAt < currentTurn.startedAt) {
+        currentTurn.startedAt = item.createdAt;
+      }
+      if (
+        currentTurn.completedAt === null ||
+        item.createdAt > currentTurn.completedAt
+      ) {
+        currentTurn.completedAt = item.createdAt;
+      }
     }
+
+    const result = getTimelineItemResult(item);
+    if (result) currentTurn.result = result;
   }
 
-  return sections;
+  return turns.filter((turn) => turn.goal || turn.items.length > 0);
 };
 
-const CurrentWorkCard = ({ work }: { work: CurrentWorkSummary }) => {
-  const styles = ACTIVITY_GROUP_STYLES[work.groupName];
-  const Icon = getActivityGroupIcon(work.groupName);
+const TurnTimelineCard = ({
+  turn,
+  isActive,
+  isStreaming,
+  nowMs,
+  currentWork,
+  isExpanded,
+  onToggle,
+}: {
+  turn: TurnTimeline;
+  isActive: boolean;
+  isStreaming: boolean;
+  nowMs: number;
+  currentWork: CurrentWorkSummary | null;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) => {
+  const hasError = Boolean(turn.result?.isError);
+  const headerTone: ActivityGroupName = hasError
+    ? "Issues"
+    : isActive && isStreaming
+      ? "Checks"
+      : turn.result
+        ? "Complete"
+        : "Other";
+  const styles = ACTIVITY_GROUP_STYLES[headerTone];
+  const Icon = hasError
+    ? TriangleAlert
+    : isActive && isStreaming
+      ? CircleDot
+      : turn.result
+        ? CheckCircle2
+        : MessageSquareText;
+  const startTime = turn.promptTime ?? turn.startedAt;
+  const endTime = turn.completedAt ?? turn.startedAt;
+  const durationMs =
+    startTime && endTime && endTime >= startTime ? endTime - startTime : 0;
+  const liveDurationMs =
+    isActive && isStreaming && startTime ? nowMs - startTime : 0;
+  const statusText =
+    isActive && isStreaming
+      ? `Working for ${formatShortDuration(liveDurationMs)}`
+      : hasError
+        ? "Needs attention"
+        : turn.result
+          ? `Worked for ${formatShortDuration(durationMs)}`
+          : "Activity";
+  const latestTime =
+    turn.completedAt === null
+      ? ""
+      : formatTimestamp(new Date(turn.completedAt).toISOString());
+  const title = turn.goal ? summarizeText(turn.goal, 120) : "Recent activity";
+  const currentAction =
+    isActive && isStreaming && currentWork?.groupName !== "Goal"
+      ? [currentWork?.title, currentWork?.detail].filter(Boolean).join(" - ")
+      : "";
 
   return (
-    <div
-      className={cn(
-        "mb-2 flex min-w-0 items-start gap-2 rounded-lg border px-3 py-2.5 shadow-sm",
-        styles.header,
-      )}
-    >
-      <span
+    <section className="overflow-hidden rounded-lg border border-slate-200/70 bg-white shadow-sm dark:border-white/10 dark:bg-zinc-950">
+      <button
+        type="button"
+        onClick={onToggle}
         className={cn(
-          "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
-          styles.icon,
+          "relative flex w-full items-start gap-2 px-3 py-2.5 text-left transition-colors",
+          styles.header,
         )}
       >
-        <Icon className="h-3.5 w-3.5" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-foreground">
-          {work.title}
-        </p>
-        {work.detail ? (
-          <p className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted-foreground">
-            {work.detail}
-          </p>
+        <span className={cn("absolute left-0 top-0 h-full w-0.5", styles.accent)} />
+        <span
+          className={cn(
+            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
+            styles.icon,
+          )}
+        >
+          <Icon
+            className={cn("h-3.5 w-3.5", isActive && isStreaming && "animate-pulse")}
+          />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="truncate text-sm font-semibold text-foreground">
+              {title}
+            </span>
+            <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
+              {statusText}
+            </span>
+          </span>
+          {currentAction ? (
+            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+              {currentAction}
+            </span>
+          ) : null}
+        </span>
+        {latestTime ? (
+          <span className="hidden shrink-0 pt-0.5 text-[10px] text-muted-foreground/70 sm:inline">
+            {latestTime}
+          </span>
         ) : null}
-      </div>
-    </div>
+        {isExpanded ? (
+          <ChevronUp className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronDown className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+      </button>
+      {isExpanded ? (
+        <div className="border-t border-slate-200/70 dark:border-white/10">
+          {turn.items.length > 0 ? (
+            turn.items.map((item) =>
+              item.source === "message" ? (
+                <ActivityMessageRow key={item.key} message={item.message} />
+              ) : (
+                <ActivityEventRow key={item.key} event={item.event} />
+              ),
+            )
+          ) : (
+            <div className="px-3 py-3 text-xs text-muted-foreground">
+              Waiting for the first activity update.
+            </div>
+          )}
+        </div>
+      ) : null}
+    </section>
   );
 };
 
@@ -1288,6 +1639,7 @@ export const ChatInterface = ({
     PendingImageAttachment[]
   >([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   // Local draft so the field can be cleared/typed freely; committed (and
   // sanitized) to the store on blur.
   const [maxTurnsDraft, setMaxTurnsDraft] = useState(String(maxTurns));
@@ -1339,6 +1691,16 @@ export const ChatInterface = ({
       // Ignore storage failures; the live resize still works.
     }
   }, [inspectorWidth]);
+
+  useEffect(() => {
+    if (!isStreaming) {
+      return;
+    }
+
+    setNowMs(Date.now());
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [isStreaming]);
 
   const latestUserGoal = useMemo(() => {
     for (let index = transcriptEvents.length - 1; index >= 0; index -= 1) {
@@ -1399,8 +1761,6 @@ export const ChatInterface = ({
   const currentStatusText = isStreaming
     ? `${activeHarnessLabel} is working`
     : latestMilestone || "Idle";
-  const highlightedWork =
-    isStreaming && currentWork?.groupName !== "Goal" ? currentWork : null;
   const showAssistantChrome = !previewFullscreen;
   const composerTone: ActivityGroupName =
     unseenIssuesCount > 0 ? "Issues" : isStreaming ? "Complete" : "Other";
@@ -1540,10 +1900,20 @@ export const ChatInterface = ({
       .map(({ item }) => item);
   }, [messages, transcriptEvents]);
 
-  const activitySections = useMemo(
-    () => buildChronologicalActivitySections(timeline),
+  const turnTimeline = useMemo(
+    () => buildTurnTimeline(timeline),
     [timeline],
   );
+  const activeTurn = turnTimeline[turnTimeline.length - 1] ?? null;
+  const activeTurnStartMs = activeTurn?.promptTime ?? activeTurn?.startedAt;
+  const liveActivityText =
+    isStreaming && activeTurnStartMs
+      ? `Working for ${formatShortDuration(nowMs - activeTurnStartMs)}`
+      : currentStatusText;
+  const liveActivityDetail =
+    isStreaming && currentWork?.groupName !== "Goal"
+      ? [currentWork?.title, currentWork?.detail].filter(Boolean).join(" - ")
+      : "";
 
   const toggleActivitySection = useCallback(
     (sectionId: string, currentExpanded: boolean) => {
@@ -2891,7 +3261,9 @@ export const ChatInterface = ({
                   )}
                 />
                 <span className="truncate">
-                  {isStreaming ? `${activeHarnessLabel} is working` : "Recent activity"}
+                  {[liveActivityText, liveActivityDetail]
+                    .filter(Boolean)
+                    .join(" - ")}
                 </span>
               </div>
               <Badge
@@ -2925,92 +3297,25 @@ export const ChatInterface = ({
                 </div>
               ) : (
                 <>
-                  {highlightedWork ? (
-                    <CurrentWorkCard work={highlightedWork} />
-                  ) : null}
                   <div className="space-y-2">
-                    {activitySections.map((section) => {
-                      const styles = ACTIVITY_GROUP_STYLES[section.groupName];
-                      const Icon = getActivityGroupIcon(section.groupName);
-                      const isLatestSection =
-                        activitySections[activitySections.length - 1]?.id ===
-                        section.id;
-                      const defaultExpanded =
-                        section.groupName !== "Thinking" ||
-                        section.items.length === 1 ||
-                        isLatestSection;
+                    {turnTimeline.map((turn) => {
+                      const isActiveTurn = activeTurn?.id === turn.id;
                       const isExpanded =
-                        activitySectionOverrides[section.id] ?? defaultExpanded;
-                      const latestTime =
-                        section.latestCreatedAt === null
-                          ? ""
-                          : formatTimestamp(
-                              new Date(section.latestCreatedAt).toISOString(),
-                            );
+                        activitySectionOverrides[turn.id] ?? true;
 
                       return (
-                        <section
-                          key={section.id}
-                          className="overflow-hidden rounded-lg border border-slate-200/70 bg-white shadow-sm dark:border-white/10 dark:bg-zinc-950"
-                        >
-                          <button
-                            type="button"
-                            onClick={() =>
-                              toggleActivitySection(section.id, isExpanded)
-                            }
-                            className={cn(
-                              "relative flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors",
-                              styles.header,
-                            )}
-                          >
-                            <span
-                              className={cn(
-                                "absolute left-0 top-0 h-full w-0.5",
-                                styles.accent,
-                              )}
-                            />
-                            <span
-                              className={cn(
-                                "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
-                                styles.icon,
-                              )}
-                            >
-                              <Icon className="h-3.5 w-3.5" />
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-semibold text-foreground">
-                                {ACTIVITY_GROUP_LABELS[section.groupName]}
-                              </span>
-                            </span>
-                            {latestTime ? (
-                              <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 sm:inline">
-                                {latestTime}
-                              </span>
-                            ) : null}
-                            {isExpanded ? (
-                              <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                            )}
-                          </button>
-                          {isExpanded ? (
-                            <div className="border-t border-slate-200/70 dark:border-white/10">
-                              {section.items.map((item) =>
-                                item.source === "message" ? (
-                                  <ActivityMessageRow
-                                    key={item.key}
-                                    message={item.message}
-                                  />
-                                ) : (
-                                  <ActivityEventRow
-                                    key={item.key}
-                                    event={item.event}
-                                  />
-                                ),
-                              )}
-                            </div>
-                          ) : null}
-                        </section>
+                        <TurnTimelineCard
+                          key={turn.id}
+                          turn={turn}
+                          isActive={isActiveTurn}
+                          isStreaming={isStreaming && isActiveTurn}
+                          nowMs={nowMs}
+                          currentWork={currentWork}
+                          isExpanded={isExpanded}
+                          onToggle={() =>
+                            toggleActivitySection(turn.id, isExpanded)
+                          }
+                        />
                       );
                     })}
                   </div>
