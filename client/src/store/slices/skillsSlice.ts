@@ -177,10 +177,12 @@ export const querySkills = createAsyncThunk<
   { skills: Skill[]; claudeMd: ClaudeMd | null },
   { projectId: string; runPixel: RunPixelFn }
 >("skills/querySkills", async ({ projectId, runPixel }) => {
-  const pixelString = `GetAppSkills( project='${projectId}' ) ;`;
+  // ListSkills scans the project's skill-host directories on disk (so manually
+  // added skill files are included). includeContent=true returns each skill's
+  // SKILL.md body, which the skills dialog needs to render its tabs.
+  const pixelString = `ListSkills( project='${projectId}', includeContent=true ) ;`;
   try {
     const response = await runPixel<unknown>(pixelString);
-    // console.log("querySkills response:", response);
     return normalizeSkillsPayload(response);
   } catch (error) {
     console.error("Error fetching skills:", error);
