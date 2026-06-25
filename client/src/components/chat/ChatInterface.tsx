@@ -8,6 +8,7 @@ import {
   ChevronUp,
   CircleDot,
   Copy,
+  Brain,
   FileSearch,
   Image as ImageIcon,
   MessageSquareText,
@@ -18,7 +19,6 @@ import {
   Plus,
   Search,
   Settings,
-  Sparkles,
   SquarePen,
   Terminal,
   Trash2,
@@ -27,10 +27,12 @@ import {
   X,
 } from "lucide-react";
 import {
+  type CSSProperties,
   type ClipboardEvent,
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type SyntheticEvent,
   type UIEvent,
   useCallback,
@@ -140,7 +142,8 @@ type SkillTab = {
 
 type InspectorTab = "activity" | "issues" | "engines" | "history" | "settings";
 type ActivityGroupName =
-  | "Planning"
+  | "Goal"
+  | "Thinking"
   | "Reading"
   | "Editing"
   | "Checks"
@@ -184,6 +187,13 @@ type PendingImageAttachment = {
   dataUri: string;
 };
 
+type QueuedChatMessage = {
+  id: string;
+  content: string;
+  attachments: PendingImageAttachment[];
+  createdAt: number;
+};
+
 const createAttachmentId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -191,11 +201,23 @@ const createAttachmentId = () => {
   return `image-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
+const createQueuedMessageId = () => `queued-${createAttachmentId()}`;
+
 const formatAttachmentSize = (bytes: number) => {
   if (bytes < 1024 * 1024) {
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const QUEUE_DRAIN_DELAY_MS = 500;
+
+const getQueuedMessagePreview = (message: QueuedChatMessage) => {
+  const content = message.content.trim();
+  if (content) return content;
+  return message.attachments.length === 1
+    ? "Image prompt"
+    : `${message.attachments.length} image prompts`;
 };
 
 const readImageAttachment = (file: File) =>
@@ -288,6 +310,40 @@ const currentSlashValue = (
 
 const TOOL_ENGINE_PREFIX_RE =
   /^a?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}_+/i;
+const INSPECTOR_DEFAULT_WIDTH = 416;
+const INSPECTOR_MIN_WIDTH = 320;
+const INSPECTOR_MAX_WIDTH = 760;
+const INSPECTOR_WIDTH_STORAGE_KEY = "agent47:inspectorWidth";
+
+const clampInspectorWidth = (value: number, viewportWidth?: number) => {
+  const viewport =
+    viewportWidth ??
+    (typeof window !== "undefined" ? window.innerWidth : INSPECTOR_MAX_WIDTH);
+  const reservedMainWidth = viewport >= 1024 ? 420 : 280;
+  const viewportMax = Math.max(
+    INSPECTOR_MIN_WIDTH,
+    Math.min(INSPECTOR_MAX_WIDTH, viewport - reservedMainWidth),
+  );
+  return Math.min(Math.max(value, INSPECTOR_MIN_WIDTH), viewportMax);
+};
+
+const readStoredInspectorWidth = () => {
+  if (typeof window === "undefined") {
+    return INSPECTOR_DEFAULT_WIDTH;
+  }
+
+  try {
+    const stored = Number.parseInt(
+      window.localStorage.getItem(INSPECTOR_WIDTH_STORAGE_KEY) ?? "",
+      10,
+    );
+    return Number.isFinite(stored)
+      ? clampInspectorWidth(stored)
+      : INSPECTOR_DEFAULT_WIDTH;
+  } catch {
+    return INSPECTOR_DEFAULT_WIDTH;
+  }
+};
 
 const formatTimestamp = (timestamp?: string) => {
   if (!timestamp) return "";
@@ -311,37 +367,76 @@ const getToolDisplayName = (toolName?: string) => {
   return normalized ? toTitleCase(normalized) : "Tool";
 };
 
+const getToolKey = (toolName?: string) =>
+  stripToolEnginePrefix(toolName)
+    .replace(/[\s_-]+/g, "")
+    .toLowerCase();
+
+const getRecordValue = (
+  record: Record<string, unknown> | undefined,
+  keys: string[],
+) => {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (value !== undefined && value !== null && value !== "") {
+      return value;
+    }
+  }
+  return undefined;
+};
+
+const stringifyToolValue = (value: unknown) => {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const formatLineRange = (args?: Record<string, unknown>) => {
+  const offsetValue = getRecordValue(args, ["offset", "start", "line"]);
+  const limitValue = getRecordValue(args, ["limit"]);
+  const offset = Number(offsetValue);
+  const limit = Number(limitValue);
+
+  if (!Number.isFinite(offset) || offset <= 0) {
+    return "";
+  }
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return `line ${offset}`;
+  }
+  return `lines ${offset}-${offset + limit - 1}`;
+};
+
 const summarizeArgs = (args?: Record<string, unknown>) => {
   if (!args) return "";
-  const preferredKeys = [
-    "file_path",
-    "filePath",
-    "path",
-    "command",
-    "query",
-    "pattern",
-    "glob",
-    "offset",
-    "limit",
-  ];
-  const entries = Object.entries(args).filter(
-    ([, value]) => value !== undefined && value !== null && value !== "",
-  );
-  const ordered = [
-    ...preferredKeys.flatMap((key) =>
-      entries.filter(([entryKey]) => entryKey === key),
-    ),
-    ...entries.filter(([key]) => !preferredKeys.includes(key)),
-  ].slice(0, 3);
+  const parts: string[] = [];
+  const filePath = getRecordValue(args, ["file_path", "filePath", "path"]);
+  const project = getRecordValue(args, ["project", "projectId"]);
+  const query = getRecordValue(args, ["query", "pattern", "search", "glob"]);
+  const command = getRecordValue(args, ["command"]);
+  const lineRange = formatLineRange(args);
 
-  return ordered
-    .map(([key, value]) => {
-      const stringValue =
-        typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
-      const compact = stringValue.replace(/\s+/g, " ").trim();
-      return `${key}=${compact.length > 80 ? `${compact.slice(0, 77)}...` : compact}`;
-    })
-    .join(", ");
+  if (filePath) parts.push(stringifyToolValue(filePath));
+  if (lineRange) parts.push(lineRange);
+  if (project) parts.push(`project ${stringifyToolValue(project)}`);
+  if (query) parts.push(stringifyToolValue(query));
+  if (command && !filePath) parts.push(stringifyToolValue(command));
+
+  if (parts.length > 0) {
+    return parts.map((part) => summarizeText(part, 120)).join(" - ");
+  }
+
+  return Object.entries(args)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .slice(0, 3)
+    .map(([key, value]) => `${key}: ${summarizeText(stringifyToolValue(value), 80)}`)
+    .join(" - ");
 };
 
 const summarizeText = (value: string, limit = 180) => {
@@ -350,9 +445,196 @@ const summarizeText = (value: string, limit = 180) => {
   return `${compact.slice(0, limit - 3)}...`;
 };
 
+const stripReadLineNumbers = (value: string) =>
+  value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*\d+\s+/, "").trimEnd())
+    .join("\n");
+
+const summarizeDirectoryOutput = (value: string) => {
+  const entries = value
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^(DIR|FILE)\s+\S+\s+\S+\s+(?:\d+\s+)?(.+)$/);
+      if (!match) return "";
+      return match[1] === "DIR" ? `${match[2]}/` : match[2];
+    })
+    .filter(Boolean);
+
+  if (entries.length === 0) return "";
+  const visible = entries.slice(0, 6).join(", ");
+  return entries.length > 6 ? `${visible}, ...` : visible;
+};
+
+const summarizeToolOutput = (value?: string, limit = 180) => {
+  if (!value) return "";
+  const directorySummary = summarizeDirectoryOutput(value);
+  if (directorySummary) {
+    return summarizeText(directorySummary, limit);
+  }
+  return summarizeText(stripReadLineNumbers(value), limit);
+};
+
+type RawDetailBlock = {
+  label?: string;
+  value: string;
+  variant?: "code" | "text";
+};
+
+const prettyPrintRecord = (value?: Record<string, unknown>) => {
+  if (!value || Object.keys(value).length === 0) return "";
+  return JSON.stringify(value, null, 2);
+};
+
+const getVisibleStatus = (status?: string) => {
+  if (!status) return "";
+  const normalized = status.toLowerCase();
+  if (["success", "completed", "complete"].includes(normalized)) {
+    return "";
+  }
+  if (normalized === "streaming") return "running";
+  return status;
+};
+
+const cleanActivityTitle = (value: string) =>
+  value
+    .replace(
+      /^(Goal|Thinking|Planning|Reading|Editing|Checks|Issues|Complete|Other):\s*/i,
+      "",
+    )
+    .trim();
+
+const stripMarkdownEmphasis = (value: string) =>
+  value
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .trim();
+
+const cleanThinkingDetail = (value: string) =>
+  stripMarkdownEmphasis(value)
+    .replace(/^I['’]m thinking(?:\s+that)?\s+/i, "")
+    .replace(/^Thinking(?:\s+that)?\s+/i, "")
+    .trim();
+
+const getAssistantThoughtParts = (text: string) => {
+  const trimmed = text.trim();
+  const headingMatch = trimmed.match(/^\*\*([^*]+)\*\*\s*(.*)$/s);
+
+  if (headingMatch) {
+    return {
+      title: cleanActivityTitle(stripMarkdownEmphasis(headingMatch[1])),
+      detail: cleanThinkingDetail(headingMatch[2]),
+    };
+  }
+
+  return {
+    title: "Thinking",
+    detail: cleanThinkingDetail(trimmed),
+  };
+};
+
+const getAssistantThoughtFullText = (text: string) => {
+  const parts = getAssistantThoughtParts(text);
+  return [parts.title !== "Thinking" ? parts.title : "", parts.detail]
+    .filter(Boolean)
+    .join("\n\n");
+};
+
+const getActivityEventTitle = (event: TranscriptEvent) => {
+  if (event.kind === "user-prompt") return "Goal";
+  if (event.kind === "assistant-text") {
+    return getAssistantThoughtParts(event.text).title;
+  }
+  if (event.kind === "tool-invocation") {
+    return cleanActivityTitle(event.title ?? getToolDisplayName(event.toolName));
+  }
+  if (event.kind === "tool-result") {
+    return cleanActivityTitle(event.title ?? getToolDisplayName(event.toolName));
+  }
+  if (event.kind === "max-turns-reached") return "Turn Limit";
+  if (event.kind === "agent-result") return event.isError ? "Issue" : "Done";
+  return "Activity";
+};
+
+const getActivityEventDetail = (event: TranscriptEvent) => {
+  if (event.kind === "user-prompt") return summarizeText(event.text);
+  if (event.kind === "assistant-text") {
+    return summarizeText(getAssistantThoughtParts(event.text).detail);
+  }
+  if (event.kind === "tool-invocation") {
+    return event.description ?? summarizeArgs(event.arguments);
+  }
+  if (event.kind === "tool-result") {
+    const inputSummary = summarizeArgs(event.toolParameterValues);
+    const outputSummary = summarizeToolOutput(
+      event.content ?? event.detailedContent,
+      180,
+    );
+    if (inputSummary && outputSummary) {
+      return `${inputSummary} - ${outputSummary}`;
+    }
+    if (outputSummary) return outputSummary;
+    return inputSummary;
+  }
+  if (event.kind === "max-turns-reached") {
+    return `${event.turnCount} of ${event.maxTurns} turns used`;
+  }
+  if (event.kind === "agent-result") {
+    return [
+      typeof event.durationMs === "number"
+        ? `${Math.round(event.durationMs / 1000)}s`
+        : "",
+      event.stopReason ?? "",
+    ]
+      .filter(Boolean)
+      .join(" - ");
+  }
+  return "";
+};
+
+const getActivityEventRawDetails = (event: TranscriptEvent): RawDetailBlock[] => {
+  if (event.kind === "assistant-text") {
+    const value = getAssistantThoughtFullText(event.text);
+    return value ? [{ value, variant: "text" }] : [];
+  }
+  if (event.kind === "tool-invocation") {
+    const args = prettyPrintRecord(event.arguments);
+    return args ? [{ label: "Call", value: args }] : [];
+  }
+  if (event.kind === "tool-result") {
+    const blocks: RawDetailBlock[] = [];
+    const params = prettyPrintRecord(event.toolParameterValues);
+    if (params) blocks.push({ label: "Inputs", value: params });
+    const output = event.detailedContent ?? event.content;
+    if (output) blocks.push({ label: "Output", value: stripReadLineNumbers(output) });
+    return blocks;
+  }
+  return [];
+};
+
+const mergeToolInvocationResult = (
+  invocation: TranscriptEvent,
+  result: TranscriptEvent,
+): TranscriptEvent => {
+  if (invocation.kind !== "tool-invocation" || result.kind !== "tool-result") {
+    return result;
+  }
+
+  return {
+    ...result,
+    toolName: result.toolName ?? invocation.toolName,
+    title: result.title ?? invocation.title,
+    toolParameterValues: result.toolParameterValues ?? invocation.arguments,
+  };
+};
+
 const getActivityGroup = (event: TranscriptEvent) => {
-  if (event.kind === "user-prompt" || event.kind === "assistant-text") {
-    return "Planning";
+  if (event.kind === "user-prompt") {
+    return "Goal";
+  }
+  if (event.kind === "assistant-text") {
+    return "Thinking";
   }
   if (event.kind === "agent-result") {
     return event.isError ? "Issues" : "Complete";
@@ -361,9 +643,7 @@ const getActivityGroup = (event: TranscriptEvent) => {
 
   const toolName =
     event.kind === "tool-invocation" ? event.toolName : event.toolName ?? "";
-  const key = stripToolEnginePrefix(toolName)
-    .replace(/[\s_-]+/g, "")
-    .toLowerCase();
+  const key = getToolKey(toolName);
 
   if (
     key.includes("read") ||
@@ -398,7 +678,7 @@ const getActivityGroup = (event: TranscriptEvent) => {
 const getActivityIcon = (event: TranscriptEvent) => {
   const group = getActivityGroup(event);
   if (event.kind === "user-prompt") return MessageSquareText;
-  if (group === "Planning") return Sparkles;
+  if (group === "Thinking") return Brain;
   if (group === "Reading") return FileSearch;
   if (group === "Editing") return Pencil;
   if (group === "Checks") return Terminal;
@@ -408,7 +688,8 @@ const getActivityIcon = (event: TranscriptEvent) => {
 };
 
 const ACTIVITY_GROUP_LABELS: Record<ActivityGroupName, string> = {
-  Planning: "Planning",
+  Goal: "Goal",
+  Thinking: "Thinking",
   Reading: "Reading",
   Editing: "Editing",
   Checks: "Checks",
@@ -427,12 +708,19 @@ const ACTIVITY_GROUP_STYLES: Record<
     badge: string;
   }
 > = {
-  Planning: {
+  Goal: {
     accent: "bg-sky-500",
     header: "bg-sky-50/80 dark:bg-sky-950/20",
     icon: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-300",
     text: "text-sky-700 dark:text-sky-300",
     badge: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-300",
+  },
+  Thinking: {
+    accent: "bg-cyan-500",
+    header: "bg-cyan-50/80 dark:bg-cyan-950/20",
+    icon: "border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-950/30 dark:text-cyan-300",
+    text: "text-cyan-700 dark:text-cyan-300",
+    badge: "border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-950/30 dark:text-cyan-300",
   },
   Reading: {
     accent: "bg-indigo-500",
@@ -479,7 +767,8 @@ const ACTIVITY_GROUP_STYLES: Record<
 };
 
 const getActivityGroupIcon = (group: ActivityGroupName) => {
-  if (group === "Planning") return Sparkles;
+  if (group === "Goal") return MessageSquareText;
+  if (group === "Thinking") return Brain;
   if (group === "Reading") return FileSearch;
   if (group === "Editing") return Pencil;
   if (group === "Checks") return Terminal;
@@ -489,60 +778,31 @@ const getActivityGroupIcon = (group: ActivityGroupName) => {
 };
 
 const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
   const Icon = getActivityIcon(event);
   const group = getActivityGroup(event);
   const styles = ACTIVITY_GROUP_STYLES[group];
-
-  let title = group;
-  let detail = "";
-  let status = "";
-
-  if (event.kind === "user-prompt") {
-    title = "Goal";
-    detail = summarizeText(event.text);
-  } else if (event.kind === "assistant-text") {
-    detail = summarizeText(event.text);
-  } else if (event.kind === "tool-invocation") {
-    title = `${group}: ${event.title ?? getToolDisplayName(event.toolName)}`;
-    detail = event.description ?? summarizeArgs(event.arguments);
-    status = event.status === "streaming" ? "running" : "";
-  } else if (event.kind === "tool-result") {
-    title = `${group}: ${event.title ?? getToolDisplayName(event.toolName)}`;
-    detail =
-      event.stats
-        ? [
-            event.stats.readCount > 0 ? `${event.stats.readCount} reads` : "",
-            event.stats.searchCount > 0
-              ? `${event.stats.searchCount} searches`
-              : "",
-            event.stats.bashCount > 0 ? `${event.stats.bashCount} commands` : "",
-            event.stats.editFileCount > 0
-              ? `${event.stats.editFileCount} edits`
-              : "",
-          ]
-            .filter(Boolean)
-            .join(" · ")
-        : summarizeText(event.content ?? event.detailedContent ?? "", 140);
-    status = event.status;
-  } else if (event.kind === "max-turns-reached") {
-    detail = `${event.turnCount} of ${event.maxTurns} turns used`;
-  } else if (event.kind === "agent-result") {
-    detail = [
-      typeof event.numTurns === "number" ? `${event.numTurns} turns` : "",
-      typeof event.durationMs === "number"
-        ? `${Math.round(event.durationMs / 1000)}s`
-        : "",
-      event.stopReason ?? "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-  }
+  const title = getActivityEventTitle(event);
+  const detail = getActivityEventDetail(event);
+  const rawDetails = getActivityEventRawDetails(event);
+  const isGenericLabelRow =
+    (group === "Thinking" && title === "Thinking") ||
+    (group === "Goal" && title === "Goal");
+  const primaryText = isGenericLabelRow ? detail || title : title;
+  const secondaryText = isGenericLabelRow ? "" : detail;
+  const status =
+    event.kind === "tool-invocation"
+      ? getVisibleStatus(event.status)
+      : event.kind === "tool-result"
+        ? getVisibleStatus(event.status)
+        : "";
+  const hasRawDetails = rawDetails.length > 0;
 
   return (
-    <div className="group relative flex min-w-0 items-start gap-2.5 border-b border-slate-200/60 bg-white px-3 py-2.5 pl-4 last:border-b-0 dark:border-white/10 dark:bg-zinc-950">
+    <div className="group relative flex min-w-0 items-start gap-2.5 border-b border-slate-200/60 bg-white px-3 py-2.5 last:border-b-0 dark:border-white/10 dark:bg-zinc-950">
       <span
         className={cn(
-          "absolute left-0 top-0 h-full w-0.5 opacity-70",
+          "absolute left-0 top-0 h-full w-px opacity-60",
           styles.accent,
         )}
       />
@@ -556,8 +816,14 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-medium text-foreground">
-            {title}
+          <span
+            className={cn(
+              isGenericLabelRow
+                ? "line-clamp-3 whitespace-normal text-xs font-normal leading-relaxed text-muted-foreground"
+                : "truncate text-sm font-medium text-foreground",
+            )}
+          >
+            {primaryText}
           </span>
           {status ? (
             <span
@@ -570,15 +836,55 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
             </span>
           ) : null}
         </div>
-        {detail ? (
-          <p className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted-foreground">
-            {detail}
+        {secondaryText ? (
+          <p className="mt-0.5 line-clamp-3 text-xs leading-snug text-muted-foreground">
+            {secondaryText}
           </p>
         ) : null}
+        {isDetailOpen ? (
+          <div className="mt-2 space-y-2 rounded-md border border-slate-200/70 bg-slate-50/80 p-2 dark:border-white/10 dark:bg-zinc-900/70">
+            {rawDetails.map((block, index) => (
+              <div key={`${block.label ?? "detail"}-${index}`} className="space-y-1">
+                {block.label ? (
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {block.label}
+                  </p>
+                ) : null}
+                {block.variant === "text" ? (
+                  <p className="whitespace-pre-wrap break-words rounded bg-white p-2 text-xs leading-relaxed text-muted-foreground dark:bg-zinc-950">
+                    {block.value}
+                  </p>
+                ) : (
+                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-white p-2 text-[11px] leading-relaxed text-slate-700 dark:bg-zinc-950 dark:text-zinc-200">
+                    {block.value}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
-      <span className="shrink-0 pt-1 text-[10px] text-muted-foreground/60">
-        {formatTimestamp(event.timestamp)}
-      </span>
+      <div className="flex shrink-0 items-center gap-1 pt-0.5">
+        <span className="hidden text-[10px] text-muted-foreground/60 sm:inline">
+          {formatTimestamp(event.timestamp)}
+        </span>
+        {hasRawDetails ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-muted-foreground"
+            title={isDetailOpen ? "Hide details" : "Show details"}
+            onClick={() => setIsDetailOpen((value) => !value)}
+          >
+            {isDetailOpen ? (
+              <ChevronUp className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5" />
+            )}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 };
@@ -632,6 +938,12 @@ type ActivityTimelineSection = {
   preview: string;
 };
 
+type CurrentWorkSummary = {
+  title: string;
+  detail: string;
+  groupName: ActivityGroupName;
+};
+
 const getTimelineItemActivityGroup = (
   item: TimelineItem,
 ): ActivityGroupName => {
@@ -646,40 +958,54 @@ const getTimelineItemPreview = (item: TimelineItem) => {
     return summarizeText(item.message.content, 120);
   }
 
-  const { event } = item;
-  if (event.kind === "user-prompt") return summarizeText(event.text, 120);
-  if (event.kind === "assistant-text") return summarizeText(event.text, 120);
-  if (event.kind === "tool-invocation") {
-    return event.description ?? summarizeArgs(event.arguments);
+  return summarizeText(getActivityEventDetail(item.event), 120);
+};
+
+const getCurrentWorkSummaryFromEvent = (
+  event: TranscriptEvent,
+): CurrentWorkSummary | null => {
+  if (event.kind === "user-prompt") {
+    return {
+      title: "Goal",
+      detail: summarizeText(event.text, 140),
+      groupName: "Goal",
+    };
   }
-  if (event.kind === "tool-result") {
-    if (event.stats) {
-      return [
-        event.stats.readCount > 0 ? `${event.stats.readCount} reads` : "",
-        event.stats.searchCount > 0 ? `${event.stats.searchCount} searches` : "",
-        event.stats.bashCount > 0 ? `${event.stats.bashCount} commands` : "",
-        event.stats.editFileCount > 0 ? `${event.stats.editFileCount} edits` : "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
-    }
-    return summarizeText(event.content ?? event.detailedContent ?? "", 120);
+
+  if (event.kind === "assistant-text") {
+    const parts = getAssistantThoughtParts(event.text);
+    return {
+      title: parts.title || "Thinking",
+      detail: summarizeText(parts.detail, 140),
+      groupName: "Thinking",
+    };
   }
+
+  if (event.kind === "tool-invocation" || event.kind === "tool-result") {
+    return {
+      title: getActivityEventTitle(event),
+      detail: summarizeText(getActivityEventDetail(event), 140),
+      groupName: getActivityGroup(event),
+    };
+  }
+
   if (event.kind === "max-turns-reached") {
-    return `${event.turnCount} of ${event.maxTurns} turns used`;
+    return {
+      title: "Turn limit reached",
+      detail: getActivityEventDetail(event),
+      groupName: "Issues",
+    };
   }
+
   if (event.kind === "agent-result") {
-    return [
-      typeof event.numTurns === "number" ? `${event.numTurns} turns` : "",
-      typeof event.durationMs === "number"
-        ? `${Math.round(event.durationMs / 1000)}s`
-        : "",
-      event.stopReason ?? "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    return {
+      title: event.isError ? "Run needs attention" : "Run complete",
+      detail: getActivityEventDetail(event),
+      groupName: event.isError ? "Issues" : "Complete",
+    };
   }
-  return "";
+
+  return null;
 };
 
 const buildChronologicalActivitySections = (
@@ -709,12 +1035,46 @@ const buildChronologicalActivitySections = (
     ) {
       current.latestCreatedAt = item.createdAt;
     }
-    if (!current.preview) {
-      current.preview = getTimelineItemPreview(item);
+    const preview = getTimelineItemPreview(item);
+    if (preview) {
+      current.preview = preview;
     }
   }
 
   return sections;
+};
+
+const CurrentWorkCard = ({ work }: { work: CurrentWorkSummary }) => {
+  const styles = ACTIVITY_GROUP_STYLES[work.groupName];
+  const Icon = getActivityGroupIcon(work.groupName);
+
+  return (
+    <div
+      className={cn(
+        "mb-2 flex min-w-0 items-start gap-2 rounded-lg border px-3 py-2.5 shadow-sm",
+        styles.header,
+      )}
+    >
+      <span
+        className={cn(
+          "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
+          styles.icon,
+        )}
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold text-foreground">
+          {work.title}
+        </p>
+        {work.detail ? (
+          <p className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted-foreground">
+            {work.detail}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
 };
 
 const MessageBubble = ({
@@ -851,7 +1211,13 @@ const MessageBubble = ({
  *
  * @component
  */
-export const ChatInterface = () => {
+type ChatInterfaceProps = {
+  previewFullscreen?: boolean;
+};
+
+export const ChatInterface = ({
+  previewFullscreen = false,
+}: ChatInterfaceProps) => {
   const dispatch = useAppDispatch();
   const { runPixel, runPixelAsync, getPixelAsyncResult, getPixelJobStreaming } =
     useAppContext();
@@ -921,9 +1287,11 @@ export const ChatInterface = () => {
   const [pendingImageAttachments, setPendingImageAttachments] = useState<
     PendingImageAttachment[]
   >([]);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
   // Local draft so the field can be cleared/typed freely; committed (and
   // sanitized) to the store on blur.
   const [maxTurnsDraft, setMaxTurnsDraft] = useState(String(maxTurns));
+  const [inspectorWidth, setInspectorWidth] = useState(readStoredInspectorWidth);
 
   // Keep the draft aligned when the store value changes from elsewhere.
   useEffect(() => {
@@ -951,9 +1319,26 @@ export const ChatInterface = () => {
   const trimmedMessage = inputMessage.trim();
   const isStreaming = pendingMessageId !== null;
   const hasPendingImages = pendingImageAttachments.length > 0;
-  const isSendDisabled =
-    (trimmedMessage.length === 0 && !hasPendingImages) || isStreaming;
+  const isSendDisabled = trimmedMessage.length === 0 && !hasPendingImages;
   const activeHarnessLabel = getHarnessLabel(harnessType);
+  const inspectorStyle = useMemo(
+    () =>
+      ({
+        "--inspector-width": `${inspectorWidth}px`,
+      }) as CSSProperties,
+    [inspectorWidth],
+  );
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        INSPECTOR_WIDTH_STORAGE_KEY,
+        String(inspectorWidth),
+      );
+    } catch {
+      // Ignore storage failures; the live resize still works.
+    }
+  }, [inspectorWidth]);
 
   const latestUserGoal = useMemo(() => {
     for (let index = transcriptEvents.length - 1; index >= 0; index -= 1) {
@@ -976,24 +1361,47 @@ export const ChatInterface = () => {
   const latestMilestone = useMemo(() => {
     for (let index = transcriptEvents.length - 1; index >= 0; index -= 1) {
       const event = transcriptEvents[index];
-      if (event.kind === "assistant-text" && event.text.trim()) {
-        return summarizeText(event.text, 120);
-      }
       if (event.kind === "agent-result") {
         return event.isError ? "Run needs attention" : "Run complete";
       }
-      if (event.kind === "tool-result" && event.title) {
-        return event.title;
+      if (event.kind === "tool-result" || event.kind === "tool-invocation") {
+        return getActivityEventTitle(event);
+      }
+      if (event.kind === "assistant-text" && event.text.trim()) {
+        const parts = getAssistantThoughtParts(event.text);
+        return parts.title || "Thinking";
       }
     }
 
     return "";
   }, [transcriptEvents]);
 
+  const currentWork = useMemo(() => {
+    for (let index = transcriptEvents.length - 1; index >= 0; index -= 1) {
+      const summary = getCurrentWorkSummaryFromEvent(transcriptEvents[index]);
+      if (summary) {
+        return summary;
+      }
+    }
+
+    if (latestUserGoal) {
+      return {
+        title: "Goal",
+        detail: summarizeText(latestUserGoal, 140),
+        groupName: "Goal" as const,
+      };
+    }
+
+    return null;
+  }, [latestUserGoal, transcriptEvents]);
+
   const composerGoal = latestUserGoal || "Ready for your next instruction.";
   const currentStatusText = isStreaming
     ? `${activeHarnessLabel} is working`
     : latestMilestone || "Idle";
+  const highlightedWork =
+    isStreaming && currentWork?.groupName !== "Goal" ? currentWork : null;
+  const showAssistantChrome = !previewFullscreen;
   const composerTone: ActivityGroupName =
     unseenIssuesCount > 0 ? "Issues" : isStreaming ? "Complete" : "Other";
   const composerStyles = ACTIVITY_GROUP_STYLES[composerTone];
@@ -1060,6 +1468,7 @@ export const ChatInterface = () => {
 
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [];
+    const toolItemByUseId = new Map<string, TimelineItem>();
     for (const message of messages) {
       if (message.role === "user") {
         continue;
@@ -1074,12 +1483,42 @@ export const ChatInterface = () => {
     transcriptEvents.forEach((event, index) => {
       const parsed = Date.parse(event.timestamp);
       const stableKey = getTranscriptEventStableKey(event);
-      items.push({
+      const item: TimelineItem = {
         source: "transcript",
         createdAt: Number.isFinite(parsed) ? parsed : null,
         key: stableKey ?? `transcript-${event.kind}-${index}`,
         event,
-      });
+      };
+
+      if (event.kind === "tool-invocation") {
+        const existing = toolItemByUseId.get(event.toolUseId);
+        if (existing?.source === "transcript") {
+          existing.event =
+            existing.event.kind === "tool-result"
+              ? mergeToolInvocationResult(event, existing.event)
+              : event;
+          existing.key = stableKey ?? existing.key;
+          existing.createdAt = item.createdAt ?? existing.createdAt;
+          return;
+        }
+
+        toolItemByUseId.set(event.toolUseId, item);
+        items.push(item);
+        return;
+      }
+
+      if (event.kind === "tool-result") {
+        const existing = toolItemByUseId.get(event.toolUseId);
+        if (existing?.source === "transcript") {
+          existing.event = mergeToolInvocationResult(existing.event, event);
+          existing.key = stableKey ?? existing.key;
+          return;
+        }
+
+        toolItemByUseId.set(event.toolUseId, item);
+      }
+
+      items.push(item);
     });
     // Stable sort: if two items share a createdAt, keep insertion order.
     return items
@@ -1114,6 +1553,44 @@ export const ChatInterface = () => {
       }));
     },
     [],
+  );
+
+  const handleInspectorResizeStart = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      event.preventDefault();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      const startX = event.clientX;
+      const startWidth = inspectorWidth;
+      const previousCursor = document.body.style.cursor;
+      const previousUserSelect = document.body.style.userSelect;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+
+      const handleMove = (moveEvent: globalThis.PointerEvent) => {
+        const nextWidth = clampInspectorWidth(
+          startWidth + startX - moveEvent.clientX,
+          window.innerWidth,
+        );
+        setInspectorWidth(nextWidth);
+      };
+
+      const handleUp = () => {
+        document.body.style.cursor = previousCursor;
+        document.body.style.userSelect = previousUserSelect;
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+        window.removeEventListener("pointercancel", handleUp);
+      };
+
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleUp);
+    },
+    [inspectorWidth],
   );
 
   const handleAddImageFiles = useCallback(
@@ -1199,31 +1676,98 @@ export const ChatInterface = () => {
     );
   }, []);
 
-  const handleSendMessage = useCallback(() => {
-    if (!trimmedMessage && pendingImageAttachments.length === 0) {
+  const handleRemoveQueuedMessage = useCallback((messageId: string) => {
+    setQueuedMessages((current) =>
+      current.filter((message) => message.id !== messageId),
+    );
+  }, []);
+
+  const sendMessageNow = useCallback(
+    (message: string, attachments: PendingImageAttachment[] = []) => {
+      dispatch(
+        submitAgentMessage({
+          message,
+          imageDataUris: attachments.map((attachment) => attachment.dataUri),
+          runPixel,
+          runPixelAsync,
+          getPixelAsyncResult,
+          getPixelJobStreaming,
+        }),
+      );
+    },
+    [
+      dispatch,
+      getPixelAsyncResult,
+      getPixelJobStreaming,
+      runPixel,
+      runPixelAsync,
+    ],
+  );
+
+  const queueOrSendMessage = useCallback(
+    (message: string, attachments: PendingImageAttachment[] = []) => {
+      const content = message.trim();
+      if (!content && attachments.length === 0) {
+        return false;
+      }
+
+      if (isStreaming) {
+        setQueuedMessages((current) => [
+          ...current,
+          {
+            id: createQueuedMessageId(),
+            content,
+            attachments: attachments.map((attachment) => ({ ...attachment })),
+            createdAt: Date.now(),
+          },
+        ]);
+        toast.success("Message queued", {
+          description: "It will send after the current run finishes.",
+          duration: 2500,
+        });
+        return true;
+      }
+
+      sendMessageNow(content, attachments);
+      return true;
+    },
+    [isStreaming, sendMessageNow],
+  );
+
+  useEffect(() => {
+    setQueuedMessages([]);
+  }, [roomId]);
+
+  useEffect(() => {
+    if (isStreaming || queuedMessages.length === 0) {
       return;
     }
 
-    dispatch(
-      submitAgentMessage({
-        message: trimmedMessage,
-        imageDataUris: pendingImageAttachments.map(
-          (attachment) => attachment.dataUri,
-        ),
-        runPixel,
-        runPixelAsync,
-        getPixelAsyncResult,
-        getPixelJobStreaming,
-      }),
-    );
+    const nextQueuedMessage = queuedMessages[0];
+    const timeoutId = window.setTimeout(() => {
+      setQueuedMessages((current) => {
+        if (current[0]?.id !== nextQueuedMessage.id) {
+          return current;
+        }
+        return current.slice(1);
+      });
+      sendMessageNow(nextQueuedMessage.content, nextQueuedMessage.attachments);
+    }, QUEUE_DRAIN_DELAY_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isStreaming, queuedMessages, sendMessageNow]);
+
+  const handleSendMessage = useCallback(() => {
+    if (!queueOrSendMessage(trimmedMessage, pendingImageAttachments)) {
+      return;
+    }
+
+    dispatch(setInputMessage(""));
     setPendingImageAttachments([]);
   }, [
     dispatch,
-    runPixel,
-    runPixelAsync,
-    getPixelAsyncResult,
-    getPixelJobStreaming,
     pendingImageAttachments,
+    queueOrSendMessage,
     trimmedMessage,
   ]);
 
@@ -1437,25 +1981,9 @@ export const ChatInterface = () => {
       dispatch(markIssuesSent({ ids: issueIds, roomId }));
       setActiveTab("activity");
       setIsInspectorOpen(true);
-      dispatch(
-        submitAgentMessage({
-          message: buildIssuesRepairPrompt(selectedRecords),
-          runPixel,
-          runPixelAsync,
-          getPixelAsyncResult,
-          getPixelJobStreaming,
-        }),
-      );
+      queueOrSendMessage(buildIssuesRepairPrompt(selectedRecords));
     },
-    [
-      dispatch,
-      getPixelAsyncResult,
-      getPixelJobStreaming,
-      issueRecords,
-      roomId,
-      runPixel,
-      runPixelAsync,
-    ],
+    [dispatch, issueRecords, queueOrSendMessage, roomId],
   );
 
   useEffect(() => {
@@ -1960,14 +2488,16 @@ export const ChatInterface = () => {
 
   return (
     <>
-      <div
-        className={cn(
-          "pointer-events-none absolute inset-x-0 bottom-0 z-30",
-          isInspectorOpen
-            ? "lg:right-96 xl:right-[26rem]"
-            : "lg:right-0",
-        )}
-      >
+      {showAssistantChrome ? (
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-x-0 bottom-0 z-30",
+            isInspectorOpen
+              ? "lg:right-[var(--inspector-width)]"
+              : "lg:right-0",
+          )}
+          style={inspectorStyle}
+        >
         <div className="pointer-events-auto overflow-visible border-t border-slate-200/80 bg-white/95 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/95 dark:shadow-black/30">
           <div className={cn("h-1", composerStyles.accent)} />
           <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-200/70 px-4 py-2 dark:border-white/10">
@@ -2059,7 +2589,6 @@ export const ChatInterface = () => {
                 hasPendingImages &&
                   "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300",
               )}
-              disabled={isStreaming}
               onClick={() => imageInputRef.current?.click()}
             >
               <Paperclip className="h-4 w-4" />
@@ -2140,6 +2669,48 @@ export const ChatInterface = () => {
                   </div>
                 </div>
               ) : null}
+              {queuedMessages.length > 0 ? (
+                <div className="mb-2 rounded-lg border border-emerald-200/70 bg-emerald-50/70 p-2 dark:border-emerald-500/20 dark:bg-emerald-500/10">
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                    <span className="flex items-center gap-1.5">
+                      <CircleDot className="h-3 w-3" />
+                      Queued
+                    </span>
+                    <span>{queuedMessages.length}</span>
+                  </div>
+                  <div className="mt-1.5 space-y-1">
+                    {queuedMessages.slice(0, 2).map((message) => (
+                      <div
+                        key={message.id}
+                        className="flex items-center gap-2 rounded-md border border-white/80 bg-white px-2 py-1.5 text-xs text-slate-700 shadow-sm dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-200"
+                      >
+                        <span className="min-w-0 flex-1 truncate">
+                          {getQueuedMessagePreview(message)}
+                        </span>
+                        {message.attachments.length > 0 ? (
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {message.attachments.length} image
+                            {message.attachments.length === 1 ? "" : "s"}
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          title="Remove queued message"
+                          className="rounded-full p-1 text-muted-foreground transition hover:bg-slate-100 hover:text-foreground dark:hover:bg-zinc-800"
+                          onClick={() => handleRemoveQueuedMessage(message.id)}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    {queuedMessages.length > 2 ? (
+                      <p className="px-1 text-[11px] text-emerald-700/80 dark:text-emerald-300/80">
+                        +{queuedMessages.length - 2} more
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
               {pendingImageAttachments.length > 0 ? (
                 <div className="mb-2 flex max-h-24 flex-wrap gap-2 overflow-y-auto rounded-lg border border-sky-200/70 bg-sky-50/70 p-2 dark:border-sky-500/20 dark:bg-sky-500/10">
                   {pendingImageAttachments.map((attachment) => (
@@ -2193,21 +2764,36 @@ export const ChatInterface = () => {
               disabled={isSendDisabled}
               onClick={handleSendMessage}
               size="icon"
+              title={isStreaming ? "Queue message" : "Send message"}
               className="h-9 w-9 shrink-0 rounded-full bg-emerald-600 text-white shadow-md shadow-emerald-500/20 transition-all duration-200 hover:bg-emerald-700 hover:shadow-lg hover:shadow-emerald-500/30 disabled:bg-slate-300 disabled:shadow-none dark:disabled:bg-zinc-700"
             >
               <ArrowUp className="h-4 w-4" />
             </Button>
           </div>
         </div>
-      </div>
+        </div>
+      ) : null}
 
-      {isInspectorOpen ? (
-        <aside className="absolute inset-y-3 right-3 z-40 flex w-[min(28rem,calc(100%-1.5rem))] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-xl shadow-slate-900/10 dark:border-white/10 dark:bg-zinc-950 dark:shadow-black/30 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:w-96 xl:w-[26rem]">
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) => setActiveTab(value as InspectorTab)}
-          className="flex h-full min-h-0 flex-col"
+      {showAssistantChrome && isInspectorOpen ? (
+        <aside
+          className="absolute inset-y-3 right-3 z-40 flex w-[min(var(--inspector-width),calc(100%-1.5rem))] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-xl shadow-slate-900/10 dark:border-white/10 dark:bg-zinc-950 dark:shadow-black/30 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:w-[var(--inspector-width)]"
+          style={inspectorStyle}
         >
+          <button
+            type="button"
+            aria-label="Resize inspector"
+            title="Drag to resize inspector"
+            onPointerDown={handleInspectorResizeStart}
+            onDoubleClick={() => setInspectorWidth(INSPECTOR_DEFAULT_WIDTH)}
+            className="absolute inset-y-0 left-0 z-30 flex w-5 cursor-col-resize touch-none select-none items-center justify-center border-r border-slate-200/50 bg-white/70 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 active:bg-slate-100 dark:border-white/10 dark:bg-zinc-950/70 dark:text-zinc-600 dark:hover:bg-zinc-900 dark:hover:text-zinc-300"
+          >
+            <span className="h-14 w-1 rounded-full bg-current" />
+          </button>
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as InspectorTab)}
+            className="flex h-full min-h-0 flex-col pl-5"
+          >
           <header className="border-b border-slate-200/80 bg-gradient-to-b from-slate-50 to-white dark:border-white/10 dark:from-zinc-900 dark:to-zinc-950">
             <div className="flex items-center justify-between gap-3 px-3 py-2">
               <div className="flex min-w-0 items-center gap-2">
@@ -2222,9 +2808,6 @@ export const ChatInterface = () => {
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-foreground">
                     Run Inspector
-                  </p>
-                  <p className="truncate text-[11px] text-muted-foreground">
-                    {currentStatusText}
                   </p>
                 </div>
               </div>
@@ -2307,10 +2890,19 @@ export const ChatInterface = () => {
                     isStreaming ? "bg-emerald-500" : "bg-slate-300",
                   )}
                 />
-                <span className="truncate">{currentStatusText}</span>
+                <span className="truncate">
+                  {isStreaming ? `${activeHarnessLabel} is working` : "Recent activity"}
+                </span>
               </div>
-              <Badge variant="outline" className="h-6 px-2 text-[10px]">
-                {timeline.length} events
+              <Badge
+                variant="outline"
+                className={cn(
+                  "h-6 px-2 text-[10px]",
+                  isStreaming &&
+                    "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/20 dark:text-emerald-300",
+                )}
+              >
+                {isStreaming ? "Live" : "Idle"}
               </Badge>
             </div>
             <div
@@ -2333,13 +2925,20 @@ export const ChatInterface = () => {
                 </div>
               ) : (
                 <>
+                  {highlightedWork ? (
+                    <CurrentWorkCard work={highlightedWork} />
+                  ) : null}
                   <div className="space-y-2">
-                    {activitySections.map((section, sectionIndex) => {
+                    {activitySections.map((section) => {
                       const styles = ACTIVITY_GROUP_STYLES[section.groupName];
                       const Icon = getActivityGroupIcon(section.groupName);
+                      const isLatestSection =
+                        activitySections[activitySections.length - 1]?.id ===
+                        section.id;
                       const defaultExpanded =
-                        section.groupName !== "Planning" ||
-                        section.items.length === 1;
+                        section.groupName !== "Thinking" ||
+                        section.items.length === 1 ||
+                        isLatestSection;
                       const isExpanded =
                         activitySectionOverrides[section.id] ?? defaultExpanded;
                       const latestTime =
@@ -2360,7 +2959,7 @@ export const ChatInterface = () => {
                               toggleActivitySection(section.id, isExpanded)
                             }
                             className={cn(
-                              "relative flex w-full items-center gap-2 px-3 py-2 text-left transition-colors",
+                              "relative flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors",
                               styles.header,
                             )}
                           >
@@ -2380,24 +2979,8 @@ export const ChatInterface = () => {
                             </span>
                             <span className="min-w-0 flex-1">
                               <span className="block truncate text-sm font-semibold text-foreground">
-                                {sectionIndex + 1}.{" "}
                                 {ACTIVITY_GROUP_LABELS[section.groupName]}
                               </span>
-                              <span className="block truncate text-[11px] text-muted-foreground">
-                                {isExpanded
-                                  ? `${section.items.length} event${
-                                      section.items.length === 1 ? "" : "s"
-                                    } in this step`
-                                  : section.preview || "Collapsed activity"}
-                              </span>
-                            </span>
-                            <span
-                              className={cn(
-                                "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold",
-                                styles.badge,
-                              )}
-                            >
-                              {section.items.length}
                             </span>
                             {latestTime ? (
                               <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 sm:inline">
@@ -2435,6 +3018,11 @@ export const ChatInterface = () => {
                     <div className="mt-2 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/20 dark:text-emerald-300">
                       <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
                       <span>{activeHarnessLabel} is working...</span>
+                      {queuedMessages.length > 0 ? (
+                        <span className="ml-auto rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200">
+                          {queuedMessages.length} queued
+                        </span>
+                      ) : null}
                     </div>
                   ) : (
                     <div className="mt-2 rounded-lg border border-slate-200/70 bg-white px-3 py-2.5 dark:border-white/10 dark:bg-zinc-950">
@@ -3261,7 +3849,7 @@ export const ChatInterface = () => {
           </TabsContent>
         </Tabs>
         </aside>
-      ) : (
+      ) : showAssistantChrome ? (
         <Button
           type="button"
           variant="outline"
@@ -3272,7 +3860,7 @@ export const ChatInterface = () => {
           <PanelRightOpen className="h-3.5 w-3.5" />
           Activity
         </Button>
-      )}
+      ) : null}
 
       <ConfirmationDialog
         open={pendingHarnessType !== null}

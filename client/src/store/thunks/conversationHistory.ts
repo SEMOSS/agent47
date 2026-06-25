@@ -7,6 +7,7 @@ import {
   setConversationList,
   setHarnessType,
   setIsLoadingConversations,
+  setProjectId,
   setMessages,
   setRoomId,
   updateConversationRoomName,
@@ -430,7 +431,12 @@ export const resumeConversation = createAsyncThunk<
       );
       const roomOptions = normalizeRoomOptions(rawRoomOptions);
       const storedHarnessType = readHarnessType(roomOptions?.harnessType);
+      const roomTargetProjectId = roomOptions?.targetProjectId?.trim();
+      const effectiveProjectId = roomTargetProjectId || projectId;
 
+      if (roomTargetProjectId && roomTargetProjectId !== getState().chat.projectId) {
+        dispatch(setProjectId(roomTargetProjectId));
+      }
       dispatch(setRoomId(roomId));
       dispatch(setMessages([]));
       dispatch(clearTranscript());
@@ -449,7 +455,7 @@ export const resumeConversation = createAsyncThunk<
       dispatch(setHarnessType(harnessType));
       dispatch(setTranscriptEvents(events));
 
-      writeLastRoomId(projectId, roomId);
+      writeLastRoomId(effectiveProjectId, roomId);
     } catch (error) {
       console.error("resumeConversation failed:", error);
       return rejectWithValue("Failed to resume conversation.");

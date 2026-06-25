@@ -761,7 +761,8 @@ export const HomePage = () => {
         {projectId ? (
           <div
             className={cn(
-              "flex min-h-0 flex-1 items-center justify-center overflow-auto pb-40",
+              "flex min-h-0 flex-1 items-center justify-center overflow-auto",
+              isFullscreen ? "pb-0" : "pb-40",
               viewportMode !== "desktop" && "bg-slate-100 dark:bg-zinc-950",
             )}
           >
@@ -788,7 +789,12 @@ export const HomePage = () => {
             />
           </div>
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 pb-40 text-center">
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center",
+              isFullscreen ? "pb-0" : "pb-40",
+            )}
+          >
             <p className="text-sm text-muted-foreground">{emptyStateMessage}</p>
             {showCreateProjectMessage ? (
               <p className="text-xs text-muted-foreground">
@@ -802,7 +808,7 @@ export const HomePage = () => {
           </div>
         )}
       </section>
-      <ChatInterface />
+      <ChatInterface previewFullscreen={isFullscreen} />
 
       {/* Create Project Dialog */}
       <Dialog
