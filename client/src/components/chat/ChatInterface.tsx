@@ -494,13 +494,21 @@ const summarizeToolOutput = (value?: string, limit = 180) => {
   return summarizeText(stripReadLineNumbers(value), limit);
 };
 
+const looksLikeRawJsonSummary = (value: string) => {
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    /["'][a-zA-Z0-9_-]+["']\s*:/.test(trimmed)
+  );
+};
+
 const isAssistantThinkingEvent = (event: TranscriptEvent) =>
-  event.kind === "assistant-text" &&
-  (event.display === "intent" || Boolean(event.parentToolUseId));
+  event.kind === "assistant-text";
 
 const getSemanticActivityLabel = (event: TranscriptEvent) => {
   if (event.kind === "assistant-text") {
-    return isAssistantThinkingEvent(event) ? "Thinking" : "Answer";
+    return "Thinking";
   }
   if (event.kind === "user-prompt") return "Goal";
   if (event.kind === "approval-requested") return "Approval needed";
@@ -650,6 +658,21 @@ const getAssistantThoughtFullText = (text: string) => {
     .join("\n\n");
 };
 
+const summarizeToolStats = (
+  stats?: Extract<TranscriptEvent, { kind: "tool-result" }>["stats"],
+) => {
+  if (!stats) return "";
+  const parts: string[] = [];
+  if (stats.readCount) parts.push(`${stats.readCount} read`);
+  if (stats.searchCount) parts.push(`${stats.searchCount} search`);
+  if (stats.editFileCount) parts.push(`${stats.editFileCount} edit`);
+  if (stats.bashCount) parts.push(`${stats.bashCount} command`);
+  if (stats.linesAdded || stats.linesRemoved) {
+    parts.push(`+${stats.linesAdded} -${stats.linesRemoved}`);
+  }
+  return parts.join(", ");
+};
+
 const getActivityEventTitle = (event: TranscriptEvent) => {
   if (event.kind === "user-prompt") return "Goal";
   if (event.kind === "assistant-text") {
@@ -674,24 +697,49 @@ const getActivityEventTitle = (event: TranscriptEvent) => {
 const getActivityEventDetail = (event: TranscriptEvent) => {
   if (event.kind === "user-prompt") return summarizeText(event.text);
   if (event.kind === "assistant-text") {
-    return isAssistantThinkingEvent(event)
-      ? summarizeText(getAssistantThoughtParts(event.text).detail)
-      : summarizeText(event.text, 220);
+    return summarizeText(getAssistantThoughtParts(event.text).detail);
   }
   if (event.kind === "tool-invocation") {
-    return event.description ?? summarizeArgs(event.arguments);
+    return summarizeText(event.description ?? summarizeArgs(event.arguments), 140);
   }
   if (event.kind === "tool-result") {
+    const label = getSemanticActivityLabel(event);
+    const references = getEventReferences(event);
+    const referenceSummary = references
+      .slice(0, 2)
+      .map((ref) =>
+        [shortenPath(ref.path), formatReferenceLineRange(ref)].filter(Boolean).join(" "),
+      )
+      .join(", ");
+    const statsSummary = summarizeToolStats(event.stats);
     const inputSummary = summarizeArgs(event.toolParameterValues);
-    const outputSummary = summarizeToolOutput(
+    const rawOutputSummary = summarizeToolOutput(
       event.content ?? event.detailedContent,
-      180,
+      140,
     );
-    if (inputSummary && outputSummary) {
-      return `${inputSummary} - ${outputSummary}`;
+    const outputSummary =
+      rawOutputSummary && !looksLikeRawJsonSummary(rawOutputSummary)
+        ? rawOutputSummary
+        : "";
+
+    if (label === "Read file") {
+      return referenceSummary || outputSummary || summarizeText(inputSummary, 140);
     }
-    if (outputSummary) return outputSummary;
-    return inputSummary;
+    if (label === "Search files") {
+      return outputSummary || referenceSummary || summarizeText(inputSummary, 140);
+    }
+    if (label === "Edit file") {
+      return (
+        statsSummary ||
+        referenceSummary ||
+        outputSummary ||
+        summarizeText(inputSummary, 140)
+      );
+    }
+    if (label === "Build/publish") {
+      return outputSummary || statsSummary || summarizeText(inputSummary, 140);
+    }
+    return outputSummary || referenceSummary || summarizeText(inputSummary, 140);
   }
   if (event.kind === "max-turns-reached") {
     return `${event.turnCount} of ${event.maxTurns} turns used`;
@@ -725,9 +773,7 @@ const getActivityEventDetail = (event: TranscriptEvent) => {
 
 const getActivityEventRawDetails = (event: TranscriptEvent): RawDetailBlock[] => {
   if (event.kind === "assistant-text") {
-    const value = isAssistantThinkingEvent(event)
-      ? getAssistantThoughtFullText(event.text)
-      : event.text;
+    const value = getAssistantThoughtFullText(event.text);
     return value ? [{ value, variant: "text" }] : [];
   }
   if (event.kind === "tool-invocation") {
@@ -931,16 +977,16 @@ const FileReferenceChips = ({ refs }: { refs: TranscriptReference[] }) => {
   if (refs.length === 0) return null;
 
   return (
-    <div className="mt-2 flex flex-wrap gap-1.5">
-      {refs.slice(0, 4).map((ref) => {
+    <div className="mt-1 flex flex-wrap gap-1">
+      {refs.slice(0, 3).map((ref) => {
         const lineRange = formatReferenceLineRange(ref);
         return (
           <span
             key={`${ref.path}-${lineRange}`}
-            className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300"
+            className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300"
             title={[ref.path, lineRange].filter(Boolean).join(" - ")}
           >
-            <FileSearch className="h-3 w-3 shrink-0" />
+            <FileSearch className="h-2.5 w-2.5 shrink-0" />
             <span className="truncate">{ref.label ?? shortenPath(ref.path)}</span>
             {lineRange ? (
               <span className="shrink-0 text-muted-foreground">
@@ -950,9 +996,9 @@ const FileReferenceChips = ({ refs }: { refs: TranscriptReference[] }) => {
           </span>
         );
       })}
-      {refs.length > 4 ? (
-        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-muted-foreground dark:bg-zinc-900">
-          +{refs.length - 4} more
+      {refs.length > 3 ? (
+        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] text-muted-foreground dark:bg-zinc-900">
+          +{refs.length - 3} more
         </span>
       ) : null}
     </div>
@@ -971,8 +1017,6 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
   const detail = getActivityEventDetail(event);
   const rawDetails = getActivityEventRawDetails(event);
   const references = getEventReferences(event);
-  const isAnswer =
-    event.kind === "assistant-text" && !isAssistantThinkingEvent(event);
   const primaryText =
     group === "Thinking" && title === "Thinking" ? detail || title : title;
   const secondaryText =
@@ -999,7 +1043,7 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
   };
 
   return (
-    <div className="group relative flex min-w-0 items-start gap-2.5 border-b border-slate-200/60 bg-white px-3 py-3 last:border-b-0 dark:border-white/10 dark:bg-zinc-950">
+    <div className="group relative flex min-w-0 items-start gap-2 border-b border-slate-200/60 bg-white px-3 py-2 last:border-b-0 dark:border-white/10 dark:bg-zinc-950">
       <span
         className={cn(
           "absolute left-0 top-0 h-full w-px opacity-60",
@@ -1008,19 +1052,19 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
       />
       <span
         className={cn(
-          "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border",
+          "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border",
           styles.icon,
         )}
       >
-        <Icon className="h-3.5 w-3.5" />
+        <Icon className="h-3 w-3" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span className={cn("text-xs font-semibold", styles.text)}>
+          <span className={cn("text-[11px] font-semibold", styles.text)}>
             {label}
           </span>
           {primaryText && primaryText !== label ? (
-            <span className="min-w-0 truncate text-sm font-medium text-foreground">
+            <span className="min-w-0 truncate text-xs font-medium text-foreground">
               {primaryText}
             </span>
           ) : null}
@@ -1040,12 +1084,8 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
             </span>
           ) : null}
         </div>
-        {isAnswer ? (
-          <div className="mt-1.5 rounded-md border border-slate-200/70 bg-slate-50/70 px-3 py-2 text-sm leading-relaxed dark:border-white/10 dark:bg-zinc-900/60">
-            <MarkdownRenderer content={event.text} />
-          </div>
-        ) : secondaryText || (!primaryText && detail) ? (
-          <p className="mt-1 line-clamp-3 text-xs leading-snug text-muted-foreground">
+        {secondaryText || (!primaryText && detail) ? (
+          <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
             {secondaryText || detail}
           </p>
         ) : null}
@@ -1830,7 +1870,10 @@ export const ChatInterface = ({
     const items: TimelineItem[] = [];
     const toolItemByUseId = new Map<string, TimelineItem>();
     for (const message of messages) {
-      if (message.role === "user") {
+      if (
+        message.role === "user" ||
+        (message.role === "assistant" && message.status !== "error")
+      ) {
         continue;
       }
       items.push({
@@ -1900,20 +1943,40 @@ export const ChatInterface = ({
       .map(({ item }) => item);
   }, [messages, transcriptEvents]);
 
-  const turnTimeline = useMemo(
-    () => buildTurnTimeline(timeline),
-    [timeline],
-  );
+  const turnTimeline = useMemo(() => {
+    const turns = buildTurnTimeline(timeline);
+    if (!latestUserGoal || turns.length === 0) {
+      return turns;
+    }
+
+    const latestIndex = turns.length - 1;
+    return turns.map((turn, index) =>
+      index === latestIndex && !turn.goal
+        ? { ...turn, goal: latestUserGoal, promptTime: turn.promptTime ?? turn.startedAt }
+        : turn,
+    );
+  }, [latestUserGoal, timeline]);
   const activeTurn = turnTimeline[turnTimeline.length - 1] ?? null;
+  const visibleTurnTimeline = useMemo(() => {
+    if (isStreaming && activeTurn) {
+      return [activeTurn];
+    }
+    return turnTimeline.slice(-4);
+  }, [activeTurn, isStreaming, turnTimeline]);
   const activeTurnStartMs = activeTurn?.promptTime ?? activeTurn?.startedAt;
+  const activeGoal = activeTurn?.goal ?? latestUserGoal;
   const liveActivityText =
     isStreaming && activeTurnStartMs
       ? `Working for ${formatShortDuration(nowMs - activeTurnStartMs)}`
-      : currentStatusText;
+      : activeTurn
+        ? "Recent activity"
+        : currentStatusText;
   const liveActivityDetail =
     isStreaming && currentWork?.groupName !== "Goal"
       ? [currentWork?.title, currentWork?.detail].filter(Boolean).join(" - ")
-      : "";
+      : activeGoal
+        ? summarizeText(activeGoal, 120)
+        : latestMilestone;
 
   const toggleActivitySection = useCallback(
     (sectionId: string, currentExpanded: boolean) => {
@@ -3253,17 +3316,24 @@ export const ChatInterface = ({
             className="mt-0 flex min-h-0 flex-1 flex-col bg-white dark:bg-zinc-950"
           >
             <div className="flex items-center justify-between gap-3 border-b border-slate-200/70 px-3 py-2 dark:border-white/10">
-              <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+              <div className="flex min-w-0 items-start gap-2 text-xs text-muted-foreground">
                 <span
                   className={cn(
-                    "h-2 w-2 shrink-0 rounded-full",
+                    "mt-1 h-2 w-2 shrink-0 rounded-full",
                     isStreaming ? "bg-emerald-500" : "bg-slate-300",
                   )}
                 />
-                <span className="truncate">
-                  {[liveActivityText, liveActivityDetail]
-                    .filter(Boolean)
-                    .join(" - ")}
+                <span className="min-w-0">
+                  <span className="block truncate">
+                    {[liveActivityText, liveActivityDetail]
+                      .filter(Boolean)
+                      .join(" - ")}
+                  </span>
+                  {isStreaming && activeGoal ? (
+                    <span className="mt-0.5 block truncate text-[11px] text-slate-500 dark:text-zinc-400">
+                      {summarizeText(activeGoal, 150)}
+                    </span>
+                  ) : null}
                 </span>
               </div>
               <Badge
@@ -3281,7 +3351,7 @@ export const ChatInterface = ({
               ref={messagesContainerRef}
               className="min-h-0 flex-1 overflow-y-auto bg-slate-50/60 p-2 dark:bg-zinc-950"
             >
-              {messages.length === 0 && transcriptEvents.length === 0 ? (
+              {visibleTurnTimeline.length === 0 ? (
                 <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
                   <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-muted-foreground dark:border-white/10 dark:bg-zinc-900">
                     <Activity className="h-5 w-5" />
@@ -3298,7 +3368,7 @@ export const ChatInterface = ({
               ) : (
                 <>
                   <div className="space-y-2">
-                    {turnTimeline.map((turn) => {
+                    {visibleTurnTimeline.map((turn) => {
                       const isActiveTurn = activeTurn?.id === turn.id;
                       const isExpanded =
                         activitySectionOverrides[turn.id] ?? true;
@@ -3320,15 +3390,15 @@ export const ChatInterface = ({
                     })}
                   </div>
                   {isStreaming ? (
-                    <div className="mt-2 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/20 dark:text-emerald-300">
-                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-                      <span>{activeHarnessLabel} is working...</span>
-                      {queuedMessages.length > 0 ? (
+                    queuedMessages.length > 0 ? (
+                      <div className="mt-2 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/20 dark:text-emerald-300">
+                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+                        <span>{activeHarnessLabel} is working...</span>
                         <span className="ml-auto rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200">
                           {queuedMessages.length} queued
                         </span>
-                      ) : null}
-                    </div>
+                      </div>
+                    ) : null
                   ) : (
                     <div className="mt-2 rounded-lg border border-slate-200/70 bg-white px-3 py-2.5 dark:border-white/10 dark:bg-zinc-950">
                       <LatestCommitChip
