@@ -544,6 +544,18 @@ const getSemanticActivityLabel = (event: TranscriptEvent) => {
   return cleanActivityTitle(event.displayName ?? event.title ?? getToolDisplayName(toolName));
 };
 
+const isReadFileActivity = (event: TranscriptEvent) =>
+  (event.kind === "tool-invocation" || event.kind === "tool-result") &&
+  getSemanticActivityLabel(event) === "Read file";
+
+const getActivityDisplayLabel = (event: TranscriptEvent) =>
+  isReadFileActivity(event) ? "Read" : getSemanticActivityLabel(event);
+
+const isGenericReadDetail = (value: string) =>
+  ["read file", "reading file", "reading file...", "file read"].includes(
+    value.trim().toLowerCase(),
+  );
+
 const coerceReferenceLine = (value: unknown): number | undefined => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
@@ -707,10 +719,10 @@ const getActivityEventTitle = (event: TranscriptEvent) => {
       : "Answer";
   }
   if (event.kind === "tool-invocation") {
-    return getSemanticActivityLabel(event);
+    return getActivityDisplayLabel(event);
   }
   if (event.kind === "tool-result") {
-    return getSemanticActivityLabel(event);
+    return getActivityDisplayLabel(event);
   }
   if (event.kind === "approval-requested") return "Approval needed";
   if (event.kind === "approval-resolved") return "Approval resolved";
@@ -925,6 +937,7 @@ const getActivityIcon = (event: TranscriptEvent) => {
   if (event.kind === "approval-requested") return TriangleAlert;
   if (event.kind === "approval-resolved") return CheckCircle2;
   if (event.kind === "checkpoint-created") return RotateCcw;
+  if (isReadFileActivity(event)) return FileText;
   if (group === "Thinking") return Brain;
   if (group === "Reading") return FileSearch;
   if (group === "Editing") return Pencil;
@@ -1008,34 +1021,54 @@ const getReferenceIcon = (ref?: TranscriptReference) => {
   return FileText;
 };
 
+const FileReferenceChip = ({
+  reference,
+  className,
+}: {
+  reference: TranscriptReference;
+  className?: string;
+}) => {
+  const lineRange = formatReferenceLineRange(reference);
+  const Icon = getReferenceIcon(reference);
+
+  return (
+    <span
+      className={cn(
+        "inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300",
+        className,
+      )}
+      title={[reference.path, lineRange].filter(Boolean).join(" - ")}
+    >
+      <Icon className="h-2.5 w-2.5 shrink-0" />
+      <span className="truncate">
+        {reference.label ?? shortenPath(reference.path)}
+      </span>
+      {lineRange ? (
+        <span className="shrink-0 text-muted-foreground">{lineRange}</span>
+      ) : null}
+    </span>
+  );
+};
+
+const FileReferenceOverflowChip = ({ count }: { count: number }) => (
+  <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] text-muted-foreground dark:bg-zinc-900">
+    +{count} more
+  </span>
+);
+
 const FileReferenceChips = ({ refs }: { refs: TranscriptReference[] }) => {
   if (refs.length === 0) return null;
 
   return (
     <div className="mt-1 flex flex-wrap gap-1">
-      {refs.slice(0, 3).map((ref) => {
-        const lineRange = formatReferenceLineRange(ref);
-        const Icon = getReferenceIcon(ref);
-        return (
-          <span
-            key={`${ref.path}-${lineRange}`}
-            className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300"
-            title={[ref.path, lineRange].filter(Boolean).join(" - ")}
-          >
-            <Icon className="h-2.5 w-2.5 shrink-0" />
-            <span className="truncate">{ref.label ?? shortenPath(ref.path)}</span>
-            {lineRange ? (
-              <span className="shrink-0 text-muted-foreground">
-                {lineRange}
-              </span>
-            ) : null}
-          </span>
-        );
-      })}
+      {refs.slice(0, 3).map((ref) => (
+        <FileReferenceChip
+          key={`${ref.path}-${formatReferenceLineRange(ref)}`}
+          reference={ref}
+        />
+      ))}
       {refs.length > 3 ? (
-        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] text-muted-foreground dark:bg-zinc-900">
-          +{refs.length - 3} more
-        </span>
+        <FileReferenceOverflowChip count={refs.length - 3} />
       ) : null}
     </div>
   );
@@ -1046,17 +1079,30 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
   const Icon = getActivityIcon(event);
   const group = getActivityGroup(event);
   const styles = ACTIVITY_GROUP_STYLES[group];
-  const label = getSemanticActivityLabel(event);
-  const title = cleanActivityTitle(
-    event.displayName ?? getActivityEventTitle(event),
-  );
+  const isReadFile = isReadFileActivity(event);
+  const label = getActivityDisplayLabel(event);
+  const title = isReadFile
+    ? ""
+    : cleanActivityTitle(event.displayName ?? getActivityEventTitle(event));
   const detail = getActivityEventDetail(event);
   const rawDetails = getActivityEventRawDetails(event);
   const references = getEventReferences(event);
+  const readFallbackText =
+    isReadFile && references.length === 0 && !isGenericReadDetail(detail)
+      ? detail
+      : "";
   const primaryText =
-    group === "Thinking" && title === "Thinking" ? detail || title : title;
+    isReadFile
+      ? readFallbackText
+      : group === "Thinking" && title === "Thinking"
+        ? detail || title
+        : title;
   const secondaryText =
-    group === "Thinking" && title === "Thinking" ? "" : detail;
+    isReadFile
+      ? ""
+      : group === "Thinking" && title === "Thinking"
+        ? ""
+        : detail;
   const status =
     event.kind === "tool-invocation"
       ? getVisibleStatus(event.status)
@@ -1096,9 +1142,25 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span className={cn("text-[11px] font-semibold", styles.text)}>
+          <span
+            className={cn(
+              "text-[11px] font-semibold",
+              isReadFile
+                ? "text-slate-600 dark:text-slate-300"
+                : styles.text,
+            )}
+          >
             {label}
           </span>
+          {isReadFile && references[0] ? (
+            <FileReferenceChip
+              reference={references[0]}
+              className="max-w-[15rem]"
+            />
+          ) : null}
+          {isReadFile && references.length > 1 ? (
+            <FileReferenceOverflowChip count={references.length - 1} />
+          ) : null}
           {primaryText && primaryText !== label ? (
             <span className="min-w-0 truncate text-xs font-medium text-foreground">
               {primaryText}
@@ -1120,12 +1182,12 @@ const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
             </span>
           ) : null}
         </div>
-        {secondaryText || (!primaryText && detail) ? (
+        {!isReadFile && (secondaryText || (!primaryText && detail)) ? (
           <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
             {secondaryText || detail}
           </p>
         ) : null}
-        <FileReferenceChips refs={references} />
+        {!isReadFile ? <FileReferenceChips refs={references} /> : null}
         {event.kind === "approval-requested" ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {["Allow once", "Allow for project", "Reject"].map((label) => (
@@ -1317,6 +1379,16 @@ const getTimelineItemResult = (
     ? item.event
     : undefined;
 
+const shouldRenderActivityEvent = (event: TranscriptEvent) => {
+  if (!isReadFileActivity(event)) return true;
+
+  const detail = getActivityEventDetail(event).trim();
+  return getEventReferences(event).length > 0 || Boolean(detail && !isGenericReadDetail(detail));
+};
+
+const shouldRenderTimelineItem = (item: TimelineItem) =>
+  item.source === "message" || shouldRenderActivityEvent(item.event);
+
 const buildTurnTimeline = (
   timeline: TimelineItem[],
 ): TurnTimeline[] => {
@@ -1435,6 +1507,7 @@ const TurnTimelineCard = ({
     isActive && isStreaming && currentWork?.groupName !== "Goal"
       ? [currentWork?.title, currentWork?.detail].filter(Boolean).join(" - ")
       : "";
+  const visibleItems = turn.items.filter(shouldRenderTimelineItem);
 
   return (
     <section className="overflow-hidden rounded-lg border border-slate-200/70 bg-white shadow-sm dark:border-white/10 dark:bg-zinc-950">
@@ -1485,8 +1558,8 @@ const TurnTimelineCard = ({
       </button>
       {isExpanded ? (
         <div className="border-t border-slate-200/70 dark:border-white/10">
-          {turn.items.length > 0 ? (
-            turn.items.map((item) =>
+          {visibleItems.length > 0 ? (
+            visibleItems.map((item) =>
               item.source === "message" ? (
                 <ActivityMessageRow key={item.key} message={item.message} />
               ) : (
