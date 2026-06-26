@@ -45,8 +45,6 @@ import {
   Maximize2,
   Minimize2,
   Monitor,
-  PanelRightClose,
-  PanelRightOpen,
   Plus,
   RefreshCw,
   Smartphone,
@@ -200,7 +198,6 @@ export const HomePage = () => {
     (state) => state.issues.previewSessionId,
   );
   const [projectsLoaded, setProjectsLoaded] = useState(false);
-  const [chatCollapsed, setChatCollapsed] = useState(false);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [isLoadProjectOpen, setIsLoadProjectOpen] = useState(false);
   const [projectSearchQuery, setProjectSearchQuery] = useState("");
@@ -598,7 +595,7 @@ export const HomePage = () => {
   }, [dispatch, previewSessionId, projectId, roomId]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 lg:flex-row">
+    <div className="relative flex h-full min-h-0 flex-col gap-4 lg:flex-row">
       <section
         className={cn(
           "flex min-h-[28rem] flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/50 dark:border-white/10 bg-white/70 shadow-xl shadow-slate-400/10 backdrop-blur-xl dark:bg-zinc-900/60 dark:shadow-black/20",
@@ -760,23 +757,12 @@ export const HomePage = () => {
               </Button>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setChatCollapsed((v) => !v)}
-            className="ml-auto shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-slate-200/60 hover:text-foreground dark:hover:bg-zinc-700/60"
-            title={chatCollapsed ? "Show chat" : "Hide chat"}
-          >
-            {chatCollapsed ? (
-              <PanelRightOpen className="h-3.5 w-3.5" />
-            ) : (
-              <PanelRightClose className="h-3.5 w-3.5" />
-            )}
-          </button>
         </div>
         {projectId ? (
           <div
             className={cn(
-              "flex h-full w-full items-center justify-center overflow-auto",
+              "flex min-h-0 flex-1 items-center justify-center overflow-auto",
+              isFullscreen ? "pb-0" : "pb-40",
               viewportMode !== "desktop" && "bg-slate-100 dark:bg-zinc-950",
             )}
           >
@@ -803,7 +789,12 @@ export const HomePage = () => {
             />
           </div>
         ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center">
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center",
+              isFullscreen ? "pb-0" : "pb-40",
+            )}
+          >
             <p className="text-sm text-muted-foreground">{emptyStateMessage}</p>
             {showCreateProjectMessage ? (
               <p className="text-xs text-muted-foreground">
@@ -817,11 +808,7 @@ export const HomePage = () => {
           </div>
         )}
       </section>
-      {!chatCollapsed && (
-        <div className="h-full w-full lg:w-[400px] lg:shrink-0 xl:w-[560px] 2xl:w-[460px]">
-          <ChatInterface />
-        </div>
-      )}
+      <ChatInterface previewFullscreen={isFullscreen} />
 
       {/* Create Project Dialog */}
       <Dialog

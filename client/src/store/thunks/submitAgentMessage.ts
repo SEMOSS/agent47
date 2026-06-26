@@ -30,15 +30,19 @@ type GetPixelJobStreamingFn = (jobId: string) => Promise<StreamingResponse>;
 
 type SubmitAgentMessageArgs = {
   message: string;
+  imageDataUris?: string[];
   runPixel: RunPixelFn;
   runPixelAsync: RunPixelAsyncFn;
   getPixelAsyncResult: GetPixelAsyncResultFn;
   getPixelJobStreaming: GetPixelJobStreamingFn;
 };
 
+const DEFAULT_IMAGE_ONLY_PROMPT = "Please analyze the attached image.";
+
 export const submitAgentMessage =
   ({
     message,
+    imageDataUris = [],
     runPixel,
     runPixelAsync,
     getPixelAsyncResult,
@@ -46,7 +50,8 @@ export const submitAgentMessage =
   }: SubmitAgentMessageArgs) =>
   (dispatch: AppDispatch, getState: () => RootState) => {
     const trimmedMessage = message.trim();
-    if (!trimmedMessage) {
+    const imagesForThisTurn = imageDataUris.filter(Boolean);
+    if (!trimmedMessage && imagesForThisTurn.length === 0) {
       return;
     }
 
@@ -72,12 +77,16 @@ export const submitAgentMessage =
       dispatch(addMessage({ role: "system", content: line }));
     }
 
-    if (!parsed.shouldSend) {
+    if (!parsed.shouldSend && imagesForThisTurn.length === 0) {
       dispatch(setInputMessage(""));
       return;
     }
 
-    const outboundMessage = parsed.cleanedMessage;
+    const outboundMessage =
+      parsed.cleanedMessage ||
+      (imagesForThisTurn.length === 1
+        ? DEFAULT_IMAGE_ONLY_PROMPT
+        : "Please analyze the attached images.");
 
     const stateAfter = getState();
     const { projectId, messages, effort, thinkingEnabled } = stateAfter.chat;
@@ -102,6 +111,7 @@ export const submitAgentMessage =
         projectId,
         effort: effortForThisTurn,
         thinkingEnabled: thinkingForThisTurn,
+        imageDataUris: imagesForThisTurn,
       }),
     );
     dispatch(setInputMessage(""));

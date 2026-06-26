@@ -1,6 +1,7 @@
 import type {
     TranscriptEvent,
     TranscriptHarness,
+    TranscriptReference,
 } from "@/types/transcript";
 
 type UnknownRecord = Record<string, unknown>;
@@ -61,6 +62,54 @@ export const isNonEmptyString = (value: unknown): value is string =>
 
 const readRecord = (value: unknown): Record<string, unknown> | undefined =>
     asRecord(value) ?? undefined;
+
+const readReferences = (value: unknown): TranscriptReference[] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+
+    const refs = value
+        .map((item) => {
+            const record = asRecord(item);
+            if (!record) return null;
+            const path = readString(record.path ?? record.filePath ?? record.url);
+            if (!path) return null;
+
+            const kindRaw = readString(record.kind);
+            const kind =
+                kindRaw === "directory" || kindRaw === "url"
+                    ? kindRaw
+                    : "file";
+            const startLine =
+                typeof record.startLine === "number"
+                    ? record.startLine
+                    : typeof record.line === "number"
+                      ? record.line
+                      : undefined;
+            const endLine =
+                typeof record.endLine === "number"
+                    ? record.endLine
+                    : undefined;
+
+            return {
+                path,
+                label: readString(record.label),
+                kind,
+                startLine,
+                endLine,
+            };
+        })
+        .filter(Boolean);
+
+    return refs.length > 0 ? (refs as TranscriptReference[]) : undefined;
+};
+
+const readEventMeta = (msg: UnknownRecord) => ({
+    turnId: readString(msg.turnId),
+    references: readReferences(msg.references),
+    command: readString(msg.command),
+    displayName: readString(msg.displayName),
+    startedAt: readString(msg.startedAt),
+    completedAt: readString(msg.completedAt),
+});
 
 export const isInternalTool = (toolName: string | undefined): boolean =>
     toolName === "report_intent";
@@ -168,6 +217,9 @@ const inferKind = (
 ): TranscriptEvent["kind"] | null => {
     if (msg.event === "max_turns_reached") return "max-turns-reached";
     if (msg.event === "result") return "agent-result";
+    if (msg.event === "approval_requested") return "approval-requested";
+    if (msg.event === "approval_resolved") return "approval-resolved";
+    if (msg.event === "checkpoint_created") return "checkpoint-created";
     if ("durationMs" in msg) return "tool-result";
     if ("toolName" in msg) return "tool-invocation";
     if ("promptId" in msg && "text" in msg) return "user-prompt";
@@ -176,6 +228,7 @@ const inferKind = (
 };
 
 const looksLikeEvent = (msg: Record<string, unknown>): boolean => {
+    if ("kind" in msg && typeof msg.kind === "string") return true;
     if ("toolName" in msg) return true;
     if ("durationMs" in msg) return true;
     if ("promptId" in msg) return true;
@@ -185,6 +238,8 @@ const looksLikeEvent = (msg: Record<string, unknown>): boolean => {
     }
     if ("messageId" in msg && typeof msg.messageId === "string") return true;
     if ("toolCallId" in msg && typeof msg.toolCallId === "string") return true;
+    if ("approvalId" in msg && typeof msg.approvalId === "string") return true;
+    if ("checkpointId" in msg && typeof msg.checkpointId === "string") return true;
     if (Array.isArray(msg.texts) && (msg.texts as unknown[]).length > 0) {
         return true;
     }
@@ -250,6 +305,7 @@ export const parseSingleEvent = (
     switch (kind) {
         case "user-prompt":
             return {
+                ...readEventMeta(msg),
                 kind: "user-prompt",
                 promptId: String(msg.promptId ?? ""),
                 text: String(msg.text ?? ""),
@@ -263,6 +319,7 @@ export const parseSingleEvent = (
             }
 
             return {
+                ...readEventMeta(msg),
                 kind: "tool-invocation",
                 eventId: readEventId(msg),
                 toolUseId: readToolUseId(msg),
@@ -287,6 +344,7 @@ export const parseSingleEvent = (
 
         case "assistant-text":
             return {
+                ...readEventMeta(msg),
                 kind: "assistant-text",
                 eventId: readEventId(msg),
                 text: String(msg.text ?? ""),
@@ -305,6 +363,7 @@ export const parseSingleEvent = (
 
         case "max-turns-reached":
             return {
+                ...readEventMeta(msg),
                 kind: "max-turns-reached",
                 uuid: String(msg.uuid ?? ""),
                 sessionId: readString(msg.sessionId),
@@ -322,6 +381,7 @@ export const parseSingleEvent = (
                   )
                 : undefined;
             return {
+                ...readEventMeta(msg),
                 kind: "agent-result",
                 uuid: String(msg.uuid ?? ""),
                 sessionId: readString(msg.sessionId),
@@ -359,6 +419,7 @@ export const parseSingleEvent = (
                   ? "error"
                   : "completed";
             return {
+                ...readEventMeta(msg),
                 kind: "tool-result",
                 eventId: readEventId(msg),
                 toolUseId: readToolUseId(msg),
@@ -385,6 +446,51 @@ export const parseSingleEvent = (
                 harnessType,
             };
         }
+
+        case "approval-requested":
+            return {
+                ...readEventMeta(msg),
+                kind: "approval-requested",
+                approvalId: String(msg.approvalId ?? msg.uuid ?? msg.id ?? ""),
+                title: readString(msg.title),
+                description: readString(msg.description),
+                reason: readString(msg.reason),
+                action: readString(msg.action),
+                status:
+                    readString(msg.status) === "approved"
+                        ? "approved"
+                        : readString(msg.status) === "rejected"
+                          ? "rejected"
+                          : "pending",
+                timestamp: String(msg.timestamp ?? ""),
+                harnessType,
+            };
+
+        case "approval-resolved":
+            return {
+                ...readEventMeta(msg),
+                kind: "approval-resolved",
+                approvalId: String(msg.approvalId ?? msg.uuid ?? msg.id ?? ""),
+                status:
+                    readString(msg.status) === "rejected"
+                        ? "rejected"
+                        : "approved",
+                timestamp: String(msg.timestamp ?? ""),
+                harnessType,
+            };
+
+        case "checkpoint-created":
+            return {
+                ...readEventMeta(msg),
+                kind: "checkpoint-created",
+                checkpointId: String(
+                    msg.checkpointId ?? msg.uuid ?? msg.id ?? "",
+                ),
+                title: readString(msg.title),
+                description: readString(msg.description),
+                timestamp: String(msg.timestamp ?? ""),
+                harnessType,
+            };
 
         default:
             return null;

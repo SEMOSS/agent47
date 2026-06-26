@@ -1,21 +1,42 @@
 import {
+  Activity,
   ArrowUp,
   BookOpen,
+  Bot,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
+  CircleDot,
   Copy,
+  Brain,
+  FileText,
+  FileSearch,
+  Folder,
+  Image as ImageIcon,
+  Link2,
+  MessageSquareText,
+  PanelRightClose,
+  PanelRightOpen,
+  Paperclip,
+  Pencil,
   Plus,
+  RotateCcw,
   Search,
   Settings,
-  Sparkles,
   SquarePen,
+  Terminal,
   Trash2,
   TriangleAlert,
+  Wrench,
+  X,
 } from "lucide-react";
 import {
+  type CSSProperties,
+  type ClipboardEvent,
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type SyntheticEvent,
   type UIEvent,
   useCallback,
@@ -27,7 +48,6 @@ import {
 import { toast } from "sonner";
 import { ConversationHistoryPanel } from "@/components/chat/ConversationHistoryPanel";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
-import { TranscriptEventBubble } from "@/components/chat/TranscriptEventBubble";
 import { IssuesPanel } from "@/components/chat/IssuesPanel";
 import { EnginesPanel } from "@/components/chat/EnginesPanel";
 import { AgentPicker } from "@/components/chat/AgentPicker";
@@ -112,7 +132,11 @@ import {
 import { loadProjectEngineDependencies } from "@/store/slices/enginesSlice";
 import { clearGitState, fetchCommitHistory } from "@/store/slices/gitSlice";
 import { submitAgentMessage } from "@/store/thunks/submitAgentMessage";
-import { getTranscriptEventStableKey } from "@/types/transcript";
+import {
+  getTranscriptEventStableKey,
+  type TranscriptEvent,
+  type TranscriptReference,
+} from "@/types/transcript";
 
 type SkillTab = {
   id: string;
@@ -120,6 +144,17 @@ type SkillTab = {
   skillName: string;
   content: string;
 };
+
+type InspectorTab = "activity" | "issues" | "engines" | "history" | "settings";
+type ActivityGroupName =
+  | "Goal"
+  | "Thinking"
+  | "Reading"
+  | "Editing"
+  | "Checks"
+  | "Issues"
+  | "Complete"
+  | "Other";
 
 const PERMISSION_MODE_OPTIONS: Array<{
   value: PermissionMode;
@@ -147,6 +182,67 @@ const getHarnessLabel = (harnessType: HarnessType) =>
 const isPermissionMode = (value: string): value is PermissionMode =>
   PERMISSION_MODE_OPTIONS.some((option) => option.value === value);
 const MAX_CHAT_INPUT_HEIGHT_PX = 240;
+const MAX_IMAGE_ATTACHMENTS = 4;
+const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+type PendingImageAttachment = {
+  id: string;
+  name: string;
+  size: number;
+  dataUri: string;
+};
+
+type QueuedChatMessage = {
+  id: string;
+  content: string;
+  attachments: PendingImageAttachment[];
+  createdAt: number;
+};
+
+const createAttachmentId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `image-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+const createQueuedMessageId = () => `queued-${createAttachmentId()}`;
+
+const formatAttachmentSize = (bytes: number) => {
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const QUEUE_DRAIN_DELAY_MS = 500;
+
+const getQueuedMessagePreview = (message: QueuedChatMessage) => {
+  const content = message.content.trim();
+  if (content) return content;
+  return message.attachments.length === 1
+    ? "Image prompt"
+    : `${message.attachments.length} image prompts`;
+};
+
+const readImageAttachment = (file: File) =>
+  new Promise<PendingImageAttachment>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("Unable to read image."));
+        return;
+      }
+      resolve({
+        id: createAttachmentId(),
+        name: file.name || "image",
+        size: file.size,
+        dataUri: reader.result,
+      });
+    };
+    reader.onerror = () => reject(new Error("Unable to read image."));
+    reader.readAsDataURL(file);
+  });
 
 type SlashMenuContext = {
   replaceStart: number;
@@ -216,6 +312,1270 @@ const currentSlashValue = (
   thinkingEnabled: boolean,
 ): string =>
   command.name === "/effort" ? effort : thinkingEnabled ? "on" : "off";
+
+const TOOL_ENGINE_PREFIX_RE =
+  /^a?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}_+/i;
+const INSPECTOR_DEFAULT_WIDTH = 416;
+const INSPECTOR_MIN_WIDTH = 320;
+const INSPECTOR_MAX_WIDTH = 760;
+const INSPECTOR_WIDTH_STORAGE_KEY = "agent47:inspectorWidth";
+
+const clampInspectorWidth = (value: number, viewportWidth?: number) => {
+  const viewport =
+    viewportWidth ??
+    (typeof window !== "undefined" ? window.innerWidth : INSPECTOR_MAX_WIDTH);
+  const reservedMainWidth = viewport >= 1024 ? 420 : 280;
+  const viewportMax = Math.max(
+    INSPECTOR_MIN_WIDTH,
+    Math.min(INSPECTOR_MAX_WIDTH, viewport - reservedMainWidth),
+  );
+  return Math.min(Math.max(value, INSPECTOR_MIN_WIDTH), viewportMax);
+};
+
+const readStoredInspectorWidth = () => {
+  if (typeof window === "undefined") {
+    return INSPECTOR_DEFAULT_WIDTH;
+  }
+
+  try {
+    const stored = Number.parseInt(
+      window.localStorage.getItem(INSPECTOR_WIDTH_STORAGE_KEY) ?? "",
+      10,
+    );
+    return Number.isFinite(stored)
+      ? clampInspectorWidth(stored)
+      : INSPECTOR_DEFAULT_WIDTH;
+  } catch {
+    return INSPECTOR_DEFAULT_WIDTH;
+  }
+};
+
+const formatTimestamp = (timestamp?: string) => {
+  if (!timestamp) return "";
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return timestamp;
+  return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+};
+
+const formatShortDuration = (ms: number) => {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0
+    ? `${minutes}m ${remainingSeconds}s`
+    : `${minutes}m`;
+};
+
+const shortenPath = (path: string, maxParts = 3) => {
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (parts.length <= maxParts) return path;
+  return `.../${parts.slice(-maxParts).join("/")}`;
+};
+
+const stripToolEnginePrefix = (toolName?: string) =>
+  (toolName ?? "").trim().replace(TOOL_ENGINE_PREFIX_RE, "");
+
+const toTitleCase = (value: string) =>
+  value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const getToolDisplayName = (toolName?: string) => {
+  const normalized = stripToolEnginePrefix(toolName);
+  return normalized ? toTitleCase(normalized) : "Tool";
+};
+
+const getToolKey = (toolName?: string) =>
+  stripToolEnginePrefix(toolName)
+    .replace(/[\s_-]+/g, "")
+    .toLowerCase();
+
+const getRecordValue = (
+  record: Record<string, unknown> | undefined,
+  keys: string[],
+) => {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (value !== undefined && value !== null && value !== "") {
+      return value;
+    }
+  }
+  return undefined;
+};
+
+const stringifyToolValue = (value: unknown) => {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const formatLineRange = (args?: Record<string, unknown>) => {
+  const offsetValue = getRecordValue(args, ["offset", "start", "line"]);
+  const limitValue = getRecordValue(args, ["limit"]);
+  const offset = Number(offsetValue);
+  const limit = Number(limitValue);
+
+  if (!Number.isFinite(offset) || offset <= 0) {
+    return "";
+  }
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return `line ${offset}`;
+  }
+  return `lines ${offset}-${offset + limit - 1}`;
+};
+
+const summarizeArgs = (args?: Record<string, unknown>) => {
+  if (!args) return "";
+  const parts: string[] = [];
+  const filePath = getRecordValue(args, ["file_path", "filePath", "path"]);
+  const project = getRecordValue(args, ["project", "projectId"]);
+  const query = getRecordValue(args, ["query", "pattern", "search", "glob"]);
+  const command = getRecordValue(args, ["command"]);
+  const lineRange = formatLineRange(args);
+
+  if (filePath) parts.push(stringifyToolValue(filePath));
+  if (lineRange) parts.push(lineRange);
+  if (project) parts.push(`project ${stringifyToolValue(project)}`);
+  if (query) parts.push(stringifyToolValue(query));
+  if (command && !filePath) parts.push(stringifyToolValue(command));
+
+  if (parts.length > 0) {
+    return parts.map((part) => summarizeText(part, 120)).join(" - ");
+  }
+
+  return Object.entries(args)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .slice(0, 3)
+    .map(([key, value]) => `${key}: ${summarizeText(stringifyToolValue(value), 80)}`)
+    .join(" - ");
+};
+
+const summarizeText = (value: string, limit = 180) => {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= limit) return compact;
+  return `${compact.slice(0, limit - 3)}...`;
+};
+
+const stripReadLineNumbers = (value: string) =>
+  value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*\d+\s+/, "").trimEnd())
+    .join("\n");
+
+const summarizeDirectoryOutput = (value: string) => {
+  const entries = value
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^(DIR|FILE)\s+\S+\s+\S+\s+(?:\d+\s+)?(.+)$/);
+      if (!match) return "";
+      return match[1] === "DIR" ? `${match[2]}/` : match[2];
+    })
+    .filter(Boolean);
+
+  if (entries.length === 0) return "";
+  const visible = entries.slice(0, 6).join(", ");
+  return entries.length > 6 ? `${visible}, ...` : visible;
+};
+
+const summarizeToolOutput = (value?: string, limit = 180) => {
+  if (!value) return "";
+  const directorySummary = summarizeDirectoryOutput(value);
+  if (directorySummary) {
+    return summarizeText(directorySummary, limit);
+  }
+  return summarizeText(stripReadLineNumbers(value), limit);
+};
+
+const looksLikeRawJsonSummary = (value: string) => {
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    /["'][a-zA-Z0-9_-]+["']\s*:/.test(trimmed)
+  );
+};
+
+const isAssistantThinkingEvent = (event: TranscriptEvent) =>
+  event.kind === "assistant-text";
+
+const getSemanticActivityLabel = (event: TranscriptEvent) => {
+  if (event.kind === "assistant-text") {
+    return "Thinking";
+  }
+  if (event.kind === "user-prompt") return "Goal";
+  if (event.kind === "approval-requested") return "Approval needed";
+  if (event.kind === "approval-resolved") return "Approval resolved";
+  if (event.kind === "checkpoint-created") return "Checkpoint";
+  if (event.kind === "agent-result") return event.isError ? "Issue" : "Complete";
+  if (event.kind === "max-turns-reached") return "Issue";
+
+  const toolName =
+    event.kind === "tool-invocation" ? event.toolName : event.toolName ?? "";
+  const key = getToolKey(toolName);
+
+  if (key.includes("build") || key.includes("publish")) return "Build/publish";
+  if (key.includes("grep") || key.includes("glob") || key.includes("search")) {
+    return "Search files";
+  }
+  if (key.includes("read") || key.includes("view")) return "Read file";
+  if (
+    key.includes("write") ||
+    key.includes("edit") ||
+    key.includes("save") ||
+    key.includes("commit") ||
+    key.includes("patch")
+  ) {
+    return "Edit file";
+  }
+  if (key.includes("bash") || key.includes("command") || key.includes("test")) {
+    return "Bash";
+  }
+  return cleanActivityTitle(event.displayName ?? event.title ?? getToolDisplayName(toolName));
+};
+
+const isReadFileActivity = (event: TranscriptEvent) =>
+  (event.kind === "tool-invocation" || event.kind === "tool-result") &&
+  getSemanticActivityLabel(event) === "Read file";
+
+const getActivityDisplayLabel = (event: TranscriptEvent) =>
+  isReadFileActivity(event) ? "Read" : getSemanticActivityLabel(event);
+
+const isGenericReadDetail = (value: string) =>
+  ["read file", "reading file", "reading file...", "file read"].includes(
+    value.trim().toLowerCase(),
+  );
+
+const coerceReferenceLine = (value: unknown): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+};
+
+const getLineRangeReference = (
+  path: string,
+  args?: Record<string, unknown>,
+): TranscriptReference => {
+  const startLine = coerceReferenceLine(
+    getRecordValue(args, ["offset", "start", "line", "startLine"]),
+  );
+  const limit = coerceReferenceLine(getRecordValue(args, ["limit"]));
+  const endLine =
+    startLine && limit ? startLine + Math.max(0, limit - 1) : undefined;
+  return { path, startLine, endLine };
+};
+
+const extractPathReferenceFromText = (
+  value?: string,
+): TranscriptReference | null => {
+  if (!value) return null;
+  const match = value.match(
+    /(?:^|\s)([A-Za-z0-9_.@/-]+\/[A-Za-z0-9_.@/-]+\.(?:tsx|ts|jsx|js|css|scss|json|md|html|py|java|xml|yml|yaml|toml|sql|sh))(?=\b|[\s,;:)-])/,
+  );
+  if (!match?.[1]) return null;
+  return { path: match[1] };
+};
+
+const getEventReferences = (event: TranscriptEvent): TranscriptReference[] => {
+  const refs = [...(event.references ?? [])];
+  if (event.kind === "tool-result" && event.filePath) {
+    refs.push(getLineRangeReference(event.filePath, event.toolParameterValues));
+  }
+  if (event.kind === "tool-invocation" || event.kind === "tool-result") {
+    const args =
+      event.kind === "tool-invocation"
+        ? event.arguments
+        : event.toolParameterValues;
+    const path = getRecordValue(args, ["file_path", "filePath", "path"]);
+    if (typeof path === "string" && path.trim()) {
+      refs.push(getLineRangeReference(path.trim(), args));
+    }
+  }
+  if (event.kind === "tool-invocation" || event.kind === "tool-result") {
+    const candidates = [
+      event.title,
+      event.description,
+      event.displayName,
+      event.kind === "tool-result" ? event.content : undefined,
+    ];
+    for (const candidate of candidates) {
+      const ref = extractPathReferenceFromText(candidate);
+      if (ref) refs.push(ref);
+    }
+  }
+
+  const seen = new Set<string>();
+  return refs.filter((ref) => {
+    const key = `${ref.path}:${ref.startLine ?? ""}:${ref.endLine ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const formatReferenceLineRange = (ref: TranscriptReference) => {
+  if (!ref.startLine) return "";
+  if (ref.endLine && ref.endLine !== ref.startLine) {
+    return `lines ${ref.startLine}-${ref.endLine}`;
+  }
+  return `line ${ref.startLine}`;
+};
+
+type RawDetailBlock = {
+  label?: string;
+  value: string;
+  variant?: "code" | "text";
+};
+
+const prettyPrintRecord = (value?: Record<string, unknown>) => {
+  if (!value || Object.keys(value).length === 0) return "";
+  return JSON.stringify(value, null, 2);
+};
+
+const getVisibleStatus = (status?: string) => {
+  if (!status) return "";
+  const normalized = status.toLowerCase();
+  if (["success", "completed", "complete"].includes(normalized)) {
+    return "";
+  }
+  if (normalized === "streaming") return "running";
+  return status;
+};
+
+const cleanActivityTitle = (value: string) =>
+  value
+    .replace(
+      /^(Goal|Thinking|Planning|Reading|Editing|Checks|Issues|Complete|Other):\s*/i,
+      "",
+    )
+    .trim();
+
+const stripMarkdownEmphasis = (value: string) =>
+  value
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .trim();
+
+const cleanThinkingDetail = (value: string) =>
+  stripMarkdownEmphasis(value)
+    .replace(/^I['’]m thinking(?:\s+that)?\s+/i, "")
+    .replace(/^Thinking(?:\s+that)?\s+/i, "")
+    .trim();
+
+const getAssistantThoughtParts = (text: string) => {
+  const trimmed = text.trim();
+  const headingMatch = trimmed.match(/^\*\*([^*]+)\*\*\s*([\s\S]*)$/);
+
+  if (headingMatch) {
+    return {
+      title: cleanActivityTitle(stripMarkdownEmphasis(headingMatch[1])),
+      detail: cleanThinkingDetail(headingMatch[2]),
+    };
+  }
+
+  return {
+    title: "Thinking",
+    detail: cleanThinkingDetail(trimmed),
+  };
+};
+
+const getAssistantThoughtFullText = (text: string) => {
+  const parts = getAssistantThoughtParts(text);
+  return [parts.title !== "Thinking" ? parts.title : "", parts.detail]
+    .filter(Boolean)
+    .join("\n\n");
+};
+
+const summarizeToolStats = (
+  stats?: Extract<TranscriptEvent, { kind: "tool-result" }>["stats"],
+) => {
+  if (!stats) return "";
+  const parts: string[] = [];
+  if (stats.readCount) parts.push(`${stats.readCount} read`);
+  if (stats.searchCount) parts.push(`${stats.searchCount} search`);
+  if (stats.editFileCount) parts.push(`${stats.editFileCount} edit`);
+  if (stats.bashCount) parts.push(`${stats.bashCount} command`);
+  if (stats.linesAdded || stats.linesRemoved) {
+    parts.push(`+${stats.linesAdded} -${stats.linesRemoved}`);
+  }
+  return parts.join(", ");
+};
+
+const getActivityEventTitle = (event: TranscriptEvent) => {
+  if (event.kind === "user-prompt") return "Goal";
+  if (event.kind === "assistant-text") {
+    return isAssistantThinkingEvent(event)
+      ? getAssistantThoughtParts(event.text).title
+      : "Answer";
+  }
+  if (event.kind === "tool-invocation") {
+    return getActivityDisplayLabel(event);
+  }
+  if (event.kind === "tool-result") {
+    return getActivityDisplayLabel(event);
+  }
+  if (event.kind === "approval-requested") return "Approval needed";
+  if (event.kind === "approval-resolved") return "Approval resolved";
+  if (event.kind === "checkpoint-created") return "Checkpoint";
+  if (event.kind === "max-turns-reached") return "Turn Limit";
+  if (event.kind === "agent-result") return event.isError ? "Issue" : "Done";
+  return "Activity";
+};
+
+const getActivityEventDetail = (event: TranscriptEvent) => {
+  if (event.kind === "user-prompt") return summarizeText(event.text);
+  if (event.kind === "assistant-text") {
+    return summarizeText(getAssistantThoughtParts(event.text).detail);
+  }
+  if (event.kind === "tool-invocation") {
+    return summarizeText(event.description ?? summarizeArgs(event.arguments), 140);
+  }
+  if (event.kind === "tool-result") {
+    const label = getSemanticActivityLabel(event);
+    const references = getEventReferences(event);
+    const referenceSummary = references
+      .slice(0, 2)
+      .map((ref) =>
+        [shortenPath(ref.path), formatReferenceLineRange(ref)].filter(Boolean).join(" "),
+      )
+      .join(", ");
+    const statsSummary = summarizeToolStats(event.stats);
+    const inputSummary = summarizeArgs(event.toolParameterValues);
+    const safeInputSummary = looksLikeRawJsonSummary(inputSummary)
+      ? ""
+      : summarizeText(inputSummary, 140);
+    const rawOutputSummary = summarizeToolOutput(
+      event.content ?? event.detailedContent,
+      140,
+    );
+    const outputSummary =
+      rawOutputSummary && !looksLikeRawJsonSummary(rawOutputSummary)
+        ? rawOutputSummary
+        : "";
+
+    if (label === "Read file") {
+      return referenceSummary || safeInputSummary;
+    }
+    if (label === "Search files") {
+      return outputSummary || referenceSummary || safeInputSummary;
+    }
+    if (label === "Edit file") {
+      return (
+        statsSummary ||
+        referenceSummary ||
+        outputSummary ||
+        safeInputSummary
+      );
+    }
+    if (label === "Build/publish") {
+      return outputSummary || statsSummary || safeInputSummary;
+    }
+    return outputSummary || referenceSummary || safeInputSummary;
+  }
+  if (event.kind === "max-turns-reached") {
+    return `${event.turnCount} of ${event.maxTurns} turns used`;
+  }
+  if (event.kind === "agent-result") {
+    return [
+      typeof event.durationMs === "number"
+        ? `${Math.round(event.durationMs / 1000)}s`
+        : "",
+      event.stopReason ?? "",
+    ]
+      .filter(Boolean)
+      .join(" - ");
+  }
+  if (event.kind === "approval-requested") {
+    return (
+      event.reason ??
+      event.description ??
+      event.command ??
+      summarizeText(event.title ?? "Review the requested action.")
+    );
+  }
+  if (event.kind === "approval-resolved") {
+    return event.status === "approved" ? "Approved" : "Rejected";
+  }
+  if (event.kind === "checkpoint-created") {
+    return event.description ?? event.checkpointId;
+  }
+  return "";
+};
+
+const getActivityEventRawDetails = (event: TranscriptEvent): RawDetailBlock[] => {
+  if (event.kind === "assistant-text") {
+    const value = getAssistantThoughtFullText(event.text);
+    return value ? [{ value, variant: "text" }] : [];
+  }
+  if (event.kind === "tool-invocation") {
+    const args = prettyPrintRecord(event.arguments);
+    return args ? [{ label: "IN", value: args }] : [];
+  }
+  if (event.kind === "tool-result") {
+    const blocks: RawDetailBlock[] = [];
+    const params = prettyPrintRecord(event.toolParameterValues);
+    if (params) blocks.push({ label: "IN", value: params });
+    const output = event.detailedContent ?? event.content;
+    if (output) blocks.push({ label: "OUT", value: stripReadLineNumbers(output) });
+    if (event.status && event.status.toLowerCase() === "error") {
+      blocks.push({ label: "ERROR", value: event.status, variant: "text" });
+    }
+    return blocks;
+  }
+  if (event.kind === "approval-requested") {
+    return [
+      event.command ? { label: "IN", value: event.command } : null,
+      event.reason ? { label: "Reason", value: event.reason, variant: "text" } : null,
+    ].filter(Boolean) as RawDetailBlock[];
+  }
+  if (event.kind === "checkpoint-created") {
+    return event.checkpointId
+      ? [{ label: "Checkpoint", value: event.checkpointId }]
+      : [];
+  }
+  if (event.kind === "agent-result" && event.errors?.length) {
+    return [{ label: "ERROR", value: event.errors.join("\n"), variant: "text" }];
+  }
+  if (event.kind === "max-turns-reached") {
+    return [
+      {
+        label: "Limit",
+        value: `${event.turnCount} of ${event.maxTurns} turns used`,
+        variant: "text",
+      },
+    ];
+  }
+  if (event.kind === "approval-resolved") {
+    return [{ label: "Status", value: event.status, variant: "text" }];
+  }
+  if (event.kind === "user-prompt") {
+    return event.text ? [{ label: "Goal", value: event.text, variant: "text" }] : [];
+  }
+  return [];
+};
+
+const mergeToolInvocationResult = (
+  invocation: TranscriptEvent,
+  result: TranscriptEvent,
+): TranscriptEvent => {
+  if (invocation.kind !== "tool-invocation" || result.kind !== "tool-result") {
+    return result;
+  }
+
+  return {
+    ...result,
+    toolName: result.toolName ?? invocation.toolName,
+    title: result.title ?? invocation.title,
+    toolParameterValues: result.toolParameterValues ?? invocation.arguments,
+  };
+};
+
+const getActivityGroup = (event: TranscriptEvent) => {
+  if (event.kind === "user-prompt") {
+    return "Goal";
+  }
+  if (event.kind === "assistant-text") {
+    return isAssistantThinkingEvent(event) ? "Thinking" : "Complete";
+  }
+  if (event.kind === "agent-result") {
+    return event.isError ? "Issues" : "Complete";
+  }
+  if (event.kind === "max-turns-reached") return "Issues";
+  if (event.kind === "approval-requested") return "Checks";
+  if (event.kind === "approval-resolved") {
+    return event.status === "approved" ? "Complete" : "Issues";
+  }
+  if (event.kind === "checkpoint-created") return "Complete";
+
+  const toolName =
+    event.kind === "tool-invocation" ? event.toolName : event.toolName ?? "";
+  const key = getToolKey(toolName);
+
+  if (
+    key.includes("read") ||
+    key.includes("grep") ||
+    key.includes("glob") ||
+    key.includes("search") ||
+    key.includes("view")
+  ) {
+    return "Reading";
+  }
+  if (
+    key.includes("write") ||
+    key.includes("edit") ||
+    key.includes("save") ||
+    key.includes("commit") ||
+    key.includes("patch")
+  ) {
+    return "Editing";
+  }
+  if (
+    key.includes("bash") ||
+    key.includes("command") ||
+    key.includes("test") ||
+    key.includes("build") ||
+    key.includes("publish")
+  ) {
+    return "Checks";
+  }
+  return "Other";
+};
+
+const getActivityIcon = (event: TranscriptEvent) => {
+  const group = getActivityGroup(event);
+  if (event.kind === "user-prompt") return MessageSquareText;
+  if (event.kind === "approval-requested") return TriangleAlert;
+  if (event.kind === "approval-resolved") return CheckCircle2;
+  if (event.kind === "checkpoint-created") return RotateCcw;
+  if (isReadFileActivity(event)) return FileText;
+  if (group === "Thinking") return Brain;
+  if (group === "Reading") return FileSearch;
+  if (group === "Editing") return Pencil;
+  if (group === "Checks") return Terminal;
+  if (group === "Complete") return CheckCircle2;
+  if (group === "Issues") return TriangleAlert;
+  return Wrench;
+};
+
+const ACTIVITY_GROUP_STYLES: Record<
+  ActivityGroupName,
+  {
+    accent: string;
+    header: string;
+    icon: string;
+    text: string;
+    badge: string;
+  }
+> = {
+  Goal: {
+    accent: "bg-sky-500",
+    header: "bg-sky-50/80 dark:bg-sky-950/20",
+    icon: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-300",
+    text: "text-sky-700 dark:text-sky-300",
+    badge: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-300",
+  },
+  Thinking: {
+    accent: "bg-cyan-500",
+    header: "bg-cyan-50/80 dark:bg-cyan-950/20",
+    icon: "border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-950/30 dark:text-cyan-300",
+    text: "text-cyan-700 dark:text-cyan-300",
+    badge: "border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-950/30 dark:text-cyan-300",
+  },
+  Reading: {
+    accent: "bg-indigo-500",
+    header: "bg-indigo-50/80 dark:bg-indigo-950/20",
+    icon: "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-300",
+    text: "text-indigo-700 dark:text-indigo-300",
+    badge: "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-300",
+  },
+  Editing: {
+    accent: "bg-amber-500",
+    header: "bg-amber-50/80 dark:bg-amber-950/20",
+    icon: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-300",
+    text: "text-amber-700 dark:text-amber-300",
+    badge: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-300",
+  },
+  Checks: {
+    accent: "bg-violet-500",
+    header: "bg-violet-50/80 dark:bg-violet-950/20",
+    icon: "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/30 dark:bg-violet-950/30 dark:text-violet-300",
+    text: "text-violet-700 dark:text-violet-300",
+    badge: "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/30 dark:bg-violet-950/30 dark:text-violet-300",
+  },
+  Issues: {
+    accent: "bg-rose-500",
+    header: "bg-rose-50/80 dark:bg-rose-950/20",
+    icon: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-rose-300",
+    text: "text-rose-700 dark:text-rose-300",
+    badge: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-rose-300",
+  },
+  Complete: {
+    accent: "bg-emerald-500",
+    header: "bg-emerald-50/80 dark:bg-emerald-950/20",
+    icon: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-300",
+    text: "text-emerald-700 dark:text-emerald-300",
+    badge: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-300",
+  },
+  Other: {
+    accent: "bg-slate-400",
+    header: "bg-slate-50/80 dark:bg-zinc-900/70",
+    icon: "border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-slate-300",
+    text: "text-slate-600 dark:text-slate-300",
+    badge: "border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-slate-300",
+  },
+};
+
+const getReferenceIcon = (ref?: TranscriptReference) => {
+  if (ref?.kind === "directory") return Folder;
+  if (ref?.kind === "url") return Link2;
+  return FileText;
+};
+
+const FileReferenceChip = ({
+  reference,
+  className,
+}: {
+  reference: TranscriptReference;
+  className?: string;
+}) => {
+  const lineRange = formatReferenceLineRange(reference);
+  const Icon = getReferenceIcon(reference);
+
+  return (
+    <span
+      className={cn(
+        "inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300",
+        className,
+      )}
+      title={[reference.path, lineRange].filter(Boolean).join(" - ")}
+    >
+      <Icon className="h-2.5 w-2.5 shrink-0" />
+      <span className="truncate">
+        {reference.label ?? shortenPath(reference.path)}
+      </span>
+      {lineRange ? (
+        <span className="shrink-0 text-muted-foreground">{lineRange}</span>
+      ) : null}
+    </span>
+  );
+};
+
+const FileReferenceOverflowChip = ({ count }: { count: number }) => (
+  <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] text-muted-foreground dark:bg-zinc-900">
+    +{count} more
+  </span>
+);
+
+const FileReferenceChips = ({ refs }: { refs: TranscriptReference[] }) => {
+  if (refs.length === 0) return null;
+
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {refs.slice(0, 3).map((ref) => (
+        <FileReferenceChip
+          key={`${ref.path}-${formatReferenceLineRange(ref)}`}
+          reference={ref}
+        />
+      ))}
+      {refs.length > 3 ? (
+        <FileReferenceOverflowChip count={refs.length - 3} />
+      ) : null}
+    </div>
+  );
+};
+
+const ActivityEventRow = ({ event }: { event: TranscriptEvent }) => {
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const Icon = getActivityIcon(event);
+  const group = getActivityGroup(event);
+  const styles = ACTIVITY_GROUP_STYLES[group];
+  const isReadFile = isReadFileActivity(event);
+  const label = getActivityDisplayLabel(event);
+  const title = isReadFile
+    ? ""
+    : cleanActivityTitle(event.displayName ?? getActivityEventTitle(event));
+  const detail = getActivityEventDetail(event);
+  const rawDetails = getActivityEventRawDetails(event);
+  const references = getEventReferences(event);
+  const readFallbackText =
+    isReadFile && references.length === 0 && !isGenericReadDetail(detail)
+      ? detail
+      : "";
+  const primaryText =
+    isReadFile
+      ? readFallbackText
+      : group === "Thinking" && title === "Thinking"
+        ? detail || title
+        : title;
+  const secondaryText =
+    isReadFile
+      ? ""
+      : group === "Thinking" && title === "Thinking"
+        ? ""
+        : detail;
+  const status =
+    event.kind === "tool-invocation"
+      ? getVisibleStatus(event.status)
+      : event.kind === "tool-result"
+        ? getVisibleStatus(event.status)
+        : event.kind === "approval-requested"
+          ? event.status ?? "pending"
+          : event.kind === "approval-resolved"
+            ? event.status
+            : "";
+  const duration =
+    event.kind === "tool-result" && event.durationMs
+      ? formatShortDuration(event.durationMs)
+      : event.kind === "agent-result" && event.durationMs
+        ? formatShortDuration(event.durationMs)
+        : "";
+  const hasRawDetails = rawDetails.length > 0;
+  const handleUnavailableAction = (label: string) => {
+    toast.info(`${label} will be available when the harness emits an action.`);
+  };
+
+  return (
+    <div className="group relative flex min-w-0 items-start gap-2 border-b border-slate-200/60 bg-white px-3 py-2 last:border-b-0 dark:border-white/10 dark:bg-zinc-950">
+      <span
+        className={cn(
+          "absolute left-0 top-0 h-full w-px opacity-60",
+          styles.accent,
+        )}
+      />
+      <span
+        className={cn(
+          "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border",
+          styles.icon,
+        )}
+      >
+        <Icon className="h-3 w-3" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span
+            className={cn(
+              "text-[11px] font-semibold",
+              isReadFile
+                ? "text-slate-600 dark:text-slate-300"
+                : styles.text,
+            )}
+          >
+            {label}
+          </span>
+          {isReadFile && references[0] ? (
+            <FileReferenceChip
+              reference={references[0]}
+              className="max-w-[15rem]"
+            />
+          ) : null}
+          {isReadFile && references.length > 1 ? (
+            <FileReferenceOverflowChip count={references.length - 1} />
+          ) : null}
+          {primaryText && primaryText !== label ? (
+            <span className="min-w-0 truncate text-xs font-medium text-foreground">
+              {primaryText}
+            </span>
+          ) : null}
+          {duration ? (
+            <span className="shrink-0 text-[11px] text-muted-foreground">
+              {duration}
+            </span>
+          ) : null}
+          {status ? (
+            <span
+              className={cn(
+                "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                styles.badge,
+              )}
+            >
+              {status}
+            </span>
+          ) : null}
+        </div>
+        {!isReadFile && (secondaryText || (!primaryText && detail)) ? (
+          <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+            {secondaryText || detail}
+          </p>
+        ) : null}
+        {!isReadFile ? <FileReferenceChips refs={references} /> : null}
+        {event.kind === "approval-requested" ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {["Allow once", "Allow for project", "Reject"].map((label) => (
+              <Button
+                key={label}
+                type="button"
+                variant={label === "Reject" ? "outline" : "default"}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => handleUnavailableAction(label)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        ) : null}
+        {event.kind === "checkpoint-created" ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2 h-7 gap-1.5 px-2 text-xs"
+            onClick={() => handleUnavailableAction("Restore checkpoint")}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Restore checkpoint
+          </Button>
+        ) : null}
+        {isDetailOpen ? (
+          <div className="mt-2 space-y-2 rounded-md border border-slate-200/70 bg-slate-50/80 p-2 dark:border-white/10 dark:bg-zinc-900/70">
+            {rawDetails.map((block, index) => (
+              <div key={`${block.label ?? "detail"}-${index}`} className="space-y-1">
+                {block.label ? (
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {block.label}
+                  </p>
+                ) : null}
+                {block.variant === "text" ? (
+                  <p className="whitespace-pre-wrap break-words rounded bg-white p-2 text-xs leading-relaxed text-muted-foreground dark:bg-zinc-950">
+                    {block.value}
+                  </p>
+                ) : (
+                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-white p-2 text-[11px] leading-relaxed text-slate-700 dark:bg-zinc-950 dark:text-zinc-200">
+                    {block.value}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-1 pt-0.5">
+        <span className="hidden text-[10px] text-muted-foreground/60 sm:inline">
+          {formatTimestamp(event.timestamp)}
+        </span>
+        {hasRawDetails ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-muted-foreground"
+            title={isDetailOpen ? "Hide details" : "Show details"}
+            onClick={() => setIsDetailOpen((value) => !value)}
+          >
+            {isDetailOpen ? (
+              <ChevronUp className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5" />
+            )}
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+};
+
+const ActivityMessageRow = ({ message }: { message: ChatMessage }) => {
+  if (message.status === "error") {
+    return (
+      <div className="border-b border-slate-200/60 px-3 py-3 last:border-b-0 dark:border-white/10">
+        <MessageBubble {...message} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-b border-slate-200/60 px-3 py-2.5 last:border-b-0 dark:border-white/10">
+      <div className="flex items-center gap-2">
+        <CircleDot className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-sm font-medium text-foreground">
+          {message.role === "system" ? "System" : message.author}
+        </span>
+        <span className="text-[10px] text-muted-foreground/60">
+          {message.time}
+        </span>
+      </div>
+      <p className="mt-1 line-clamp-2 pl-5 text-xs text-muted-foreground">
+        {summarizeText(message.content)}
+      </p>
+    </div>
+  );
+};
+
+type TimelineItem =
+  | {
+      source: "message";
+      createdAt: number | null;
+      key: string;
+      message: ChatMessage;
+    }
+  | {
+      source: "transcript";
+      createdAt: number | null;
+      key: string;
+      event: TranscriptEvent;
+    };
+
+type TurnTimeline = {
+  id: string;
+  turnId?: string;
+  goal?: string;
+  promptTime: number | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  items: TimelineItem[];
+  result?: Extract<TranscriptEvent, { kind: "agent-result" }>;
+};
+
+type CurrentWorkSummary = {
+  title: string;
+  detail: string;
+  groupName: ActivityGroupName;
+};
+
+const getCurrentWorkSummaryFromEvent = (
+  event: TranscriptEvent,
+): CurrentWorkSummary | null => {
+  if (event.kind === "user-prompt") {
+    return {
+      title: "Goal",
+      detail: summarizeText(event.text, 140),
+      groupName: "Goal",
+    };
+  }
+
+  if (event.kind === "assistant-text") {
+    const parts = getAssistantThoughtParts(event.text);
+    return {
+      title: parts.title || "Thinking",
+      detail: summarizeText(parts.detail, 140),
+      groupName: "Thinking",
+    };
+  }
+
+  if (event.kind === "tool-invocation" || event.kind === "tool-result") {
+    return {
+      title: getActivityEventTitle(event),
+      detail: summarizeText(getActivityEventDetail(event), 140),
+      groupName: getActivityGroup(event),
+    };
+  }
+
+  if (event.kind === "max-turns-reached") {
+    return {
+      title: "Turn limit reached",
+      detail: getActivityEventDetail(event),
+      groupName: "Issues",
+    };
+  }
+
+  if (event.kind === "agent-result") {
+    return {
+      title: event.isError ? "Run needs attention" : "Run complete",
+      detail: getActivityEventDetail(event),
+      groupName: event.isError ? "Issues" : "Complete",
+    };
+  }
+
+  return null;
+};
+
+const getTimelineItemTurnId = (item: TimelineItem): string | undefined =>
+  item.source === "transcript" ? item.event.turnId : undefined;
+
+const getTimelineItemResult = (
+  item: TimelineItem,
+): Extract<TranscriptEvent, { kind: "agent-result" }> | undefined =>
+  item.source === "transcript" && item.event.kind === "agent-result"
+    ? item.event
+    : undefined;
+
+const shouldRenderActivityEvent = (event: TranscriptEvent) => {
+  if (!isReadFileActivity(event)) return true;
+
+  const detail = getActivityEventDetail(event).trim();
+  return getEventReferences(event).length > 0 || Boolean(detail && !isGenericReadDetail(detail));
+};
+
+const shouldRenderTimelineItem = (item: TimelineItem) =>
+  item.source === "message" || shouldRenderActivityEvent(item.event);
+
+const buildTurnTimeline = (
+  timeline: TimelineItem[],
+): TurnTimeline[] => {
+  const turns: TurnTimeline[] = [];
+  let currentTurn: TurnTimeline | null = null;
+
+  const startTurn = (
+    seed: TimelineItem,
+    goal?: string,
+    turnId?: string,
+  ): TurnTimeline => {
+    const timestamp = seed.createdAt;
+    const nextTurn: TurnTimeline = {
+      id: `turn-${turns.length}-${turnId ?? seed.key}`,
+      turnId,
+      goal,
+      promptTime: goal ? timestamp : null,
+      startedAt: timestamp,
+      completedAt: null,
+      items: [],
+    };
+    turns.push(nextTurn);
+    currentTurn = nextTurn;
+    return nextTurn;
+  };
+
+  for (const item of timeline) {
+    if (item.source === "transcript" && item.event.kind === "user-prompt") {
+      startTurn(item, item.event.text, item.event.turnId ?? item.event.promptId);
+      continue;
+    }
+
+    const itemTurnId = getTimelineItemTurnId(item);
+    if (
+      !currentTurn ||
+      (itemTurnId && currentTurn.turnId && currentTurn.turnId !== itemTurnId)
+    ) {
+      currentTurn = startTurn(item, undefined, itemTurnId);
+    } else if (itemTurnId && !currentTurn.turnId) {
+      currentTurn.turnId = itemTurnId;
+    }
+
+    currentTurn.items.push(item);
+    if (item.createdAt !== null) {
+      if (currentTurn.startedAt === null || item.createdAt < currentTurn.startedAt) {
+        currentTurn.startedAt = item.createdAt;
+      }
+      if (
+        currentTurn.completedAt === null ||
+        item.createdAt > currentTurn.completedAt
+      ) {
+        currentTurn.completedAt = item.createdAt;
+      }
+    }
+
+    const result = getTimelineItemResult(item);
+    if (result) currentTurn.result = result;
+  }
+
+  return turns.filter((turn) => turn.goal || turn.items.length > 0);
+};
+
+const TurnTimelineCard = ({
+  turn,
+  isActive,
+  isStreaming,
+  nowMs,
+  currentWork,
+  isExpanded,
+  onToggle,
+}: {
+  turn: TurnTimeline;
+  isActive: boolean;
+  isStreaming: boolean;
+  nowMs: number;
+  currentWork: CurrentWorkSummary | null;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) => {
+  const hasError = Boolean(turn.result?.isError);
+  const headerTone: ActivityGroupName = hasError
+    ? "Issues"
+    : isActive && isStreaming
+      ? "Checks"
+      : turn.result
+        ? "Complete"
+        : "Other";
+  const styles = ACTIVITY_GROUP_STYLES[headerTone];
+  const Icon = hasError
+    ? TriangleAlert
+    : isActive && isStreaming
+      ? CircleDot
+      : turn.result
+        ? CheckCircle2
+        : MessageSquareText;
+  const startTime = turn.promptTime ?? turn.startedAt;
+  const endTime = turn.completedAt ?? turn.startedAt;
+  const durationMs =
+    startTime && endTime && endTime >= startTime ? endTime - startTime : 0;
+  const liveDurationMs =
+    isActive && isStreaming && startTime ? nowMs - startTime : 0;
+  const statusText =
+    isActive && isStreaming
+      ? `Working for ${formatShortDuration(liveDurationMs)}`
+      : hasError
+        ? "Needs attention"
+        : turn.result
+          ? `Worked for ${formatShortDuration(durationMs)}`
+          : "Activity";
+  const latestTime =
+    turn.completedAt === null
+      ? ""
+      : formatTimestamp(new Date(turn.completedAt).toISOString());
+  const title = turn.goal ? summarizeText(turn.goal, 120) : "Recent activity";
+  const currentAction =
+    isActive && isStreaming && currentWork?.groupName !== "Goal"
+      ? [currentWork?.title, currentWork?.detail].filter(Boolean).join(" - ")
+      : "";
+  const visibleItems = turn.items.filter(shouldRenderTimelineItem);
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-slate-200/70 bg-white shadow-sm dark:border-white/10 dark:bg-zinc-950">
+      <button
+        type="button"
+        onClick={onToggle}
+        className={cn(
+          "relative flex w-full items-start gap-2 px-3 py-2.5 text-left transition-colors",
+          styles.header,
+        )}
+      >
+        <span className={cn("absolute left-0 top-0 h-full w-0.5", styles.accent)} />
+        <span
+          className={cn(
+            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
+            styles.icon,
+          )}
+        >
+          <Icon
+            className={cn("h-3.5 w-3.5", isActive && isStreaming && "animate-pulse")}
+          />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="truncate text-sm font-semibold text-foreground">
+              {title}
+            </span>
+            <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
+              {statusText}
+            </span>
+          </span>
+          {currentAction ? (
+            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+              {currentAction}
+            </span>
+          ) : null}
+        </span>
+        {latestTime ? (
+          <span className="hidden shrink-0 pt-0.5 text-[10px] text-muted-foreground/70 sm:inline">
+            {latestTime}
+          </span>
+        ) : null}
+        {isExpanded ? (
+          <ChevronUp className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronDown className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+      </button>
+      {isExpanded ? (
+        <div className="border-t border-slate-200/70 dark:border-white/10">
+          {visibleItems.length > 0 ? (
+            visibleItems.map((item) =>
+              item.source === "message" ? (
+                <ActivityMessageRow key={item.key} message={item.message} />
+              ) : (
+                <ActivityEventRow key={item.key} event={item.event} />
+              ),
+            )
+          ) : (
+            <div className="px-3 py-3 text-xs text-muted-foreground">
+              Waiting for the first activity update.
+            </div>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+};
 
 const MessageBubble = ({
   author,
@@ -351,7 +1711,13 @@ const MessageBubble = ({
  *
  * @component
  */
-export const ChatInterface = () => {
+type ChatInterfaceProps = {
+  previewFullscreen?: boolean;
+};
+
+export const ChatInterface = ({
+  previewFullscreen = false,
+}: ChatInterfaceProps) => {
   const dispatch = useAppDispatch();
   const { runPixel, runPixelAsync, getPixelAsyncResult, getPixelJobStreaming } =
     useAppContext();
@@ -387,9 +1753,11 @@ export const ChatInterface = () => {
   const [isConfigurationOpen, setIsConfigurationOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isSkillsOpen, setIsSkillsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<
-    "build" | "issues" | "engines" | "history" | "settings"
-  >("build");
+  const [isInspectorOpen, setIsInspectorOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState<InspectorTab>("activity");
+  const [activitySectionOverrides, setActivitySectionOverrides] = useState<
+    Record<string, boolean>
+  >({});
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isLoadingSkills, setIsLoadingSkills] = useState(false);
   const [skillsError, setSkillsError] = useState<string | null>(null);
@@ -416,9 +1784,15 @@ export const ChatInterface = () => {
   const [engineLoading, setEngineLoading] = useState(false);
   const [pendingHarnessType, setPendingHarnessType] =
     useState<HarnessType | null>(null);
+  const [pendingImageAttachments, setPendingImageAttachments] = useState<
+    PendingImageAttachment[]
+  >([]);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   // Local draft so the field can be cleared/typed freely; committed (and
   // sanitized) to the store on blur.
   const [maxTurnsDraft, setMaxTurnsDraft] = useState(String(maxTurns));
+  const [inspectorWidth, setInspectorWidth] = useState(readStoredInspectorWidth);
 
   // Keep the draft aligned when the store value changes from elsewhere.
   useEffect(() => {
@@ -435,6 +1809,7 @@ export const ChatInterface = () => {
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [activeOptionIndex, setActiveOptionIndex] = useState(0);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const previousMessageCountRef = useRef(0);
   const isPinnedToBottomRef = useRef(true);
@@ -444,8 +1819,101 @@ export const ChatInterface = () => {
   const slashSignatureRef = useRef<string | null>(null);
   const trimmedMessage = inputMessage.trim();
   const isStreaming = pendingMessageId !== null;
-  const isSendDisabled = trimmedMessage.length === 0 || isStreaming;
+  const hasPendingImages = pendingImageAttachments.length > 0;
+  const isSendDisabled = trimmedMessage.length === 0 && !hasPendingImages;
   const activeHarnessLabel = getHarnessLabel(harnessType);
+  const inspectorStyle = useMemo(
+    () =>
+      ({
+        "--inspector-width": `${inspectorWidth}px`,
+      }) as CSSProperties,
+    [inspectorWidth],
+  );
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        INSPECTOR_WIDTH_STORAGE_KEY,
+        String(inspectorWidth),
+      );
+    } catch {
+      // Ignore storage failures; the live resize still works.
+    }
+  }, [inspectorWidth]);
+
+  useEffect(() => {
+    if (!isStreaming) {
+      return;
+    }
+
+    setNowMs(Date.now());
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [isStreaming]);
+
+  const latestUserGoal = useMemo(() => {
+    for (let index = transcriptEvents.length - 1; index >= 0; index -= 1) {
+      const event = transcriptEvents[index];
+      if (event.kind === "user-prompt" && event.text.trim()) {
+        return event.text.trim();
+      }
+    }
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === "user" && message.content.trim()) {
+        return message.content.trim();
+      }
+    }
+
+    return "";
+  }, [messages, transcriptEvents]);
+
+  const latestMilestone = useMemo(() => {
+    for (let index = transcriptEvents.length - 1; index >= 0; index -= 1) {
+      const event = transcriptEvents[index];
+      if (event.kind === "agent-result") {
+        return event.isError ? "Run needs attention" : "Run complete";
+      }
+      if (event.kind === "tool-result" || event.kind === "tool-invocation") {
+        return getActivityEventTitle(event);
+      }
+      if (event.kind === "assistant-text" && event.text.trim()) {
+        const parts = getAssistantThoughtParts(event.text);
+        return parts.title || "Thinking";
+      }
+    }
+
+    return "";
+  }, [transcriptEvents]);
+
+  const currentWork = useMemo(() => {
+    for (let index = transcriptEvents.length - 1; index >= 0; index -= 1) {
+      const summary = getCurrentWorkSummaryFromEvent(transcriptEvents[index]);
+      if (summary) {
+        return summary;
+      }
+    }
+
+    if (latestUserGoal) {
+      return {
+        title: "Goal",
+        detail: summarizeText(latestUserGoal, 140),
+        groupName: "Goal" as const,
+      };
+    }
+
+    return null;
+  }, [latestUserGoal, transcriptEvents]);
+
+  const composerGoal = latestUserGoal || "Ready for your next instruction.";
+  const currentStatusText = isStreaming
+    ? `${activeHarnessLabel} is working`
+    : latestMilestone || "Idle";
+  const showAssistantChrome = !previewFullscreen;
+  const composerTone: ActivityGroupName =
+    unseenIssuesCount > 0 ? "Issues" : isStreaming ? "Complete" : "Other";
+  const composerStyles = ACTIVITY_GROUP_STYLES[composerTone];
 
   const slashMenu = useMemo(
     () =>
@@ -507,33 +1975,19 @@ export const ChatInterface = () => {
     [pinnedMcps],
   );
 
-  // Merge non-user legacy chat messages (for example system errors) with
-  // transcript events. User prompts already arrive through the transcript
-  // stream/history for both harnesses, so rendering chat-state user messages
-  // here would duplicate the same bubble.
-  type TimelineItem =
-    | {
-        source: "message";
-        createdAt: number | null;
-        key: string;
-        message: ChatMessage;
-      }
-    | {
-        source: "transcript";
-        createdAt: number | null;
-        key: string;
-        event: (typeof transcriptEvents)[number];
-      };
-
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [];
+    const toolItemByUseId = new Map<string, TimelineItem>();
     for (const message of messages) {
-      if (message.role === "user") {
+      if (
+        message.role === "user" ||
+        (message.role === "assistant" && message.status !== "error")
+      ) {
         continue;
       }
       items.push({
         source: "message",
-        createdAt: message.createdAt ?? 0,
+        createdAt: message.createdAt ?? null,
         key: `msg-${message.id}`,
         message,
       });
@@ -541,12 +1995,42 @@ export const ChatInterface = () => {
     transcriptEvents.forEach((event, index) => {
       const parsed = Date.parse(event.timestamp);
       const stableKey = getTranscriptEventStableKey(event);
-      items.push({
+      const item: TimelineItem = {
         source: "transcript",
         createdAt: Number.isFinite(parsed) ? parsed : null,
         key: stableKey ?? `transcript-${event.kind}-${index}`,
         event,
-      });
+      };
+
+      if (event.kind === "tool-invocation") {
+        const existing = toolItemByUseId.get(event.toolUseId);
+        if (existing?.source === "transcript") {
+          existing.event =
+            existing.event.kind === "tool-result"
+              ? mergeToolInvocationResult(event, existing.event)
+              : event;
+          existing.key = stableKey ?? existing.key;
+          existing.createdAt = item.createdAt ?? existing.createdAt;
+          return;
+        }
+
+        toolItemByUseId.set(event.toolUseId, item);
+        items.push(item);
+        return;
+      }
+
+      if (event.kind === "tool-result") {
+        const existing = toolItemByUseId.get(event.toolUseId);
+        if (existing?.source === "transcript") {
+          existing.event = mergeToolInvocationResult(existing.event, event);
+          existing.key = stableKey ?? existing.key;
+          return;
+        }
+
+        toolItemByUseId.set(event.toolUseId, item);
+      }
+
+      items.push(item);
     });
     // Stable sort: if two items share a createdAt, keep insertion order.
     return items
@@ -568,26 +2052,264 @@ export const ChatInterface = () => {
       .map(({ item }) => item);
   }, [messages, transcriptEvents]);
 
-  const handleSendMessage = useCallback(() => {
-    if (!trimmedMessage) {
+  const turnTimeline = useMemo(() => {
+    const turns = buildTurnTimeline(timeline);
+    if (!latestUserGoal || turns.length === 0) {
+      return turns;
+    }
+
+    const latestIndex = turns.length - 1;
+    return turns.map((turn, index) =>
+      index === latestIndex && !turn.goal
+        ? { ...turn, goal: latestUserGoal, promptTime: turn.promptTime ?? turn.startedAt }
+        : turn,
+    );
+  }, [latestUserGoal, timeline]);
+  const activeTurn = turnTimeline[turnTimeline.length - 1] ?? null;
+  const visibleTurnTimeline = useMemo(() => {
+    if (isStreaming && activeTurn) {
+      return [activeTurn];
+    }
+    return turnTimeline.slice(-4);
+  }, [activeTurn, isStreaming, turnTimeline]);
+  const activeTurnStartMs = activeTurn?.promptTime ?? activeTurn?.startedAt;
+  const activeGoal = activeTurn?.goal ?? latestUserGoal;
+  const liveActivityText =
+    isStreaming && activeTurnStartMs
+      ? `Working for ${formatShortDuration(nowMs - activeTurnStartMs)}`
+      : activeTurn
+        ? "Recent activity"
+        : currentStatusText;
+  const liveActivityDetail =
+    isStreaming && currentWork?.groupName !== "Goal"
+      ? [currentWork?.title, currentWork?.detail].filter(Boolean).join(" - ")
+      : activeGoal
+        ? summarizeText(activeGoal, 120)
+        : latestMilestone;
+
+  const toggleActivitySection = useCallback(
+    (sectionId: string, currentExpanded: boolean) => {
+      setActivitySectionOverrides((current) => ({
+        ...current,
+        [sectionId]: !currentExpanded,
+      }));
+    },
+    [],
+  );
+
+  const handleInspectorResizeStart = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      event.preventDefault();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      const startX = event.clientX;
+      const startWidth = inspectorWidth;
+      const previousCursor = document.body.style.cursor;
+      const previousUserSelect = document.body.style.userSelect;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+
+      const handleMove = (moveEvent: globalThis.PointerEvent) => {
+        const nextWidth = clampInspectorWidth(
+          startWidth + startX - moveEvent.clientX,
+          window.innerWidth,
+        );
+        setInspectorWidth(nextWidth);
+      };
+
+      const handleUp = () => {
+        document.body.style.cursor = previousCursor;
+        document.body.style.userSelect = previousUserSelect;
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+        window.removeEventListener("pointercancel", handleUp);
+      };
+
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleUp);
+    },
+    [inspectorWidth],
+  );
+
+  const handleAddImageFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const allFiles = Array.from(files);
+      if (allFiles.length === 0) {
+        return;
+      }
+
+      const availableSlots =
+        MAX_IMAGE_ATTACHMENTS - pendingImageAttachments.length;
+      if (availableSlots <= 0) {
+        toast.error(`You can attach up to ${MAX_IMAGE_ATTACHMENTS} images.`);
+        return;
+      }
+
+      const acceptedFiles: File[] = [];
+      for (const file of allFiles) {
+        if (!file.type.startsWith("image/")) {
+          toast.error(`${file.name || "File"} is not an image.`);
+          continue;
+        }
+        if (file.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+          toast.error(
+            `${file.name || "Image"} is larger than ${formatAttachmentSize(
+              MAX_IMAGE_ATTACHMENT_BYTES,
+            )}.`,
+          );
+          continue;
+        }
+        acceptedFiles.push(file);
+      }
+
+      const limitedFiles = acceptedFiles.slice(0, availableSlots);
+      if (acceptedFiles.length > limitedFiles.length) {
+        toast.error(`Only ${availableSlots} more image(s) can be attached.`);
+      }
+      if (limitedFiles.length === 0) {
+        return;
+      }
+
+      try {
+        const nextAttachments = await Promise.all(
+          limitedFiles.map(readImageAttachment),
+        );
+        setPendingImageAttachments((current) => [
+          ...current,
+          ...nextAttachments,
+        ]);
+      } catch (error) {
+        console.error("Failed to read image attachment:", error);
+        toast.error("Could not read one of the selected images.");
+      }
+    },
+    [pendingImageAttachments.length],
+  );
+
+  const handleImageInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      if (event.target.files) {
+        void handleAddImageFiles(event.target.files);
+      }
+      event.target.value = "";
+    },
+    [handleAddImageFiles],
+  );
+
+  const handleMessagePaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const imageFiles = Array.from(event.clipboardData.files).filter((file) =>
+        file.type.startsWith("image/"),
+      );
+      if (imageFiles.length > 0) {
+        void handleAddImageFiles(imageFiles);
+      }
+    },
+    [handleAddImageFiles],
+  );
+
+  const handleRemoveImageAttachment = useCallback((attachmentId: string) => {
+    setPendingImageAttachments((current) =>
+      current.filter((attachment) => attachment.id !== attachmentId),
+    );
+  }, []);
+
+  const handleRemoveQueuedMessage = useCallback((messageId: string) => {
+    setQueuedMessages((current) =>
+      current.filter((message) => message.id !== messageId),
+    );
+  }, []);
+
+  const sendMessageNow = useCallback(
+    (message: string, attachments: PendingImageAttachment[] = []) => {
+      dispatch(
+        submitAgentMessage({
+          message,
+          imageDataUris: attachments.map((attachment) => attachment.dataUri),
+          runPixel,
+          runPixelAsync,
+          getPixelAsyncResult,
+          getPixelJobStreaming,
+        }),
+      );
+    },
+    [
+      dispatch,
+      getPixelAsyncResult,
+      getPixelJobStreaming,
+      runPixel,
+      runPixelAsync,
+    ],
+  );
+
+  const queueOrSendMessage = useCallback(
+    (message: string, attachments: PendingImageAttachment[] = []) => {
+      const content = message.trim();
+      if (!content && attachments.length === 0) {
+        return false;
+      }
+
+      if (isStreaming) {
+        setQueuedMessages((current) => [
+          ...current,
+          {
+            id: createQueuedMessageId(),
+            content,
+            attachments: attachments.map((attachment) => ({ ...attachment })),
+            createdAt: Date.now(),
+          },
+        ]);
+        toast.success("Message queued", {
+          description: "It will send after the current run finishes.",
+          duration: 2500,
+        });
+        return true;
+      }
+
+      sendMessageNow(content, attachments);
+      return true;
+    },
+    [isStreaming, sendMessageNow],
+  );
+
+  useEffect(() => {
+    setQueuedMessages([]);
+  }, [roomId]);
+
+  useEffect(() => {
+    if (isStreaming || queuedMessages.length === 0) {
       return;
     }
 
-    dispatch(
-      submitAgentMessage({
-        message: trimmedMessage,
-        runPixel,
-        runPixelAsync,
-        getPixelAsyncResult,
-        getPixelJobStreaming,
-      }),
-    );
+    const nextQueuedMessage = queuedMessages[0];
+    const timeoutId = window.setTimeout(() => {
+      setQueuedMessages((current) => {
+        if (current[0]?.id !== nextQueuedMessage.id) {
+          return current;
+        }
+        return current.slice(1);
+      });
+      sendMessageNow(nextQueuedMessage.content, nextQueuedMessage.attachments);
+    }, QUEUE_DRAIN_DELAY_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isStreaming, queuedMessages, sendMessageNow]);
+
+  const handleSendMessage = useCallback(() => {
+    if (!queueOrSendMessage(trimmedMessage, pendingImageAttachments)) {
+      return;
+    }
+
+    dispatch(setInputMessage(""));
+    setPendingImageAttachments([]);
   }, [
     dispatch,
-    runPixel,
-    runPixelAsync,
-    getPixelAsyncResult,
-    getPixelJobStreaming,
+    pendingImageAttachments,
+    queueOrSendMessage,
     trimmedMessage,
   ]);
 
@@ -799,26 +2521,11 @@ export const ChatInterface = () => {
       }
 
       dispatch(markIssuesSent({ ids: issueIds, roomId }));
-      setActiveTab("build");
-      dispatch(
-        submitAgentMessage({
-          message: buildIssuesRepairPrompt(selectedRecords),
-          runPixel,
-          runPixelAsync,
-          getPixelAsyncResult,
-          getPixelJobStreaming,
-        }),
-      );
+      setActiveTab("activity");
+      setIsInspectorOpen(true);
+      queueOrSendMessage(buildIssuesRepairPrompt(selectedRecords));
     },
-    [
-      dispatch,
-      getPixelAsyncResult,
-      getPixelJobStreaming,
-      issueRecords,
-      roomId,
-      runPixel,
-      runPixelAsync,
-    ],
+    [dispatch, issueRecords, queueOrSendMessage, roomId],
   );
 
   useEffect(() => {
@@ -1323,31 +3030,331 @@ export const ChatInterface = () => {
 
   return (
     <>
-      <div className="relative h-full min-h-[32rem] overflow-hidden rounded-2xl border border-slate-200/60 dark:border-white/10 bg-gradient-to-br from-slate-50/90 via-white/80 to-sky-50/50 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/80 p-6 shadow-xl shadow-slate-400/10 dark:shadow-black/20 backdrop-blur-xl">
-        <div className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-gradient-to-br from-slate-300/40 to-sky-200/30 dark:from-slate-500/15 dark:to-sky-500/10 blur-3xl animate-pulse-soft" />
+      {showAssistantChrome ? (
         <div
-          className="pointer-events-none absolute -bottom-32 -left-24 h-72 w-72 rounded-full bg-gradient-to-tr from-sky-200/35 to-slate-200/25 dark:from-sky-500/10 dark:to-slate-500/8 blur-3xl animate-pulse-soft"
-          style={{ animationDelay: "1.25s" }}
-        />
-
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) =>
-            setActiveTab(
-              value as "build" | "issues" | "engines" | "history" | "settings",
-            )
-          }
-          className="relative flex h-full flex-col"
+          className={cn(
+            "pointer-events-none absolute inset-x-0 bottom-0 z-30",
+            isInspectorOpen
+              ? "lg:right-[var(--inspector-width)]"
+              : "lg:right-0",
+          )}
+          style={inspectorStyle}
         >
-          <header className="flex flex-col gap-2 rounded-t-xl border border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-slate-50/60 via-white/40 to-sky-50/30 px-4 py-3">
-            <div className="relative flex items-center justify-center">
-              <div className="absolute left-0 top-1/2 -translate-y-1/2">
-                <ConversationHistoryPanel />
+        <div className="pointer-events-auto overflow-visible border-t border-slate-200/80 bg-white/95 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/95 dark:shadow-black/30">
+          <div className={cn("h-1", composerStyles.accent)} />
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-200/70 px-4 py-2 dark:border-white/10">
+            <div className="min-w-0 pr-2">
+              <div className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "text-[10px] font-semibold uppercase tracking-[0.18em]",
+                    composerStyles.text,
+                  )}
+                >
+                  Current goal
+                </span>
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 shrink-0 rounded-full",
+                    composerStyles.accent,
+                  )}
+                />
+                <span className="truncate text-xs text-muted-foreground">
+                  {currentStatusText}
+                </span>
               </div>
-              <p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 dark:text-slate-400">
-                Build Your App
+              <p className="mt-0.5 truncate text-sm font-medium text-foreground">
+                {summarizeText(composerGoal, 160)}
               </p>
-              <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1">
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Badge
+                variant="outline"
+                className={cn("hidden h-7 gap-1 px-2 xl:flex", composerStyles.badge)}
+              >
+                <Bot className="h-3.5 w-3.5" />
+                {activeHarnessLabel}
+              </Badge>
+              <Badge
+                variant="outline"
+                className="hidden h-7 px-2 text-[11px] xl:flex"
+              >
+                {toTitleCase(permissionMode)}
+              </Badge>
+              {unseenIssuesCount > 0 ? (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  onClick={() => {
+                    setIsInspectorOpen(true);
+                    setActiveTab("issues");
+                  }}
+                >
+                  <TriangleAlert className="h-3.5 w-3.5" />
+                  {unseenIssuesCount}
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1.5 border-slate-200/80 bg-white px-2 text-xs shadow-sm dark:border-white/10 dark:bg-zinc-900"
+                onClick={() => setIsInspectorOpen((value) => !value)}
+              >
+                {isInspectorOpen ? (
+                  <PanelRightClose className="h-3.5 w-3.5" />
+                ) : (
+                  <PanelRightOpen className="h-3.5 w-3.5" />
+                )}
+                Inspector
+              </Button>
+            </div>
+          </div>
+          <div className="flex items-end gap-2 px-4 pb-3 pt-2">
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleImageInputChange}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              title="Attach image"
+              className={cn(
+                "h-9 w-9 shrink-0 rounded-full border-slate-200/80 bg-white shadow-sm dark:border-white/10 dark:bg-zinc-900",
+                hasPendingImages &&
+                  "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300",
+              )}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
+            <div className="relative flex-1">
+              {slashMenu && activeSlashCommand ? (
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-full max-w-xl overflow-hidden rounded-lg border border-slate-200/80 bg-white shadow-xl shadow-slate-900/10 dark:border-white/10 dark:bg-zinc-950">
+                  <div className="flex max-h-72">
+                    <div className="w-32 shrink-0 space-y-0.5 overflow-y-auto border-r border-slate-200/70 bg-slate-50 p-1.5 dark:border-white/10 dark:bg-zinc-900">
+                      {slashMenu.commands.map((command, index) => {
+                        const isActive = index === slashCommandIndex;
+                        return (
+                          <button
+                            key={command.name}
+                            type="button"
+                            onClick={() => selectSlashCommand(index)}
+                            className={cn(
+                              "flex w-full flex-col rounded-md px-2.5 py-1.5 text-left transition-colors",
+                              isActive
+                                ? "bg-white shadow-sm dark:bg-zinc-800"
+                                : "hover:bg-white/70 dark:hover:bg-zinc-800/60",
+                            )}
+                          >
+                            <span className="text-sm font-medium">
+                              {command.label}
+                            </span>
+                            <span className="font-mono text-[10px] text-muted-foreground">
+                              {command.name}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex-1 space-y-0.5 overflow-y-auto p-1.5">
+                      <p className="px-2 pb-1 pt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                        {activeSlashCommand.description}
+                      </p>
+                      {activeSlashOptions.map((option, index) => {
+                        const isActive = index === slashOptionIndex;
+                        const isCurrent =
+                          currentSlashValue(
+                            activeSlashCommand,
+                            effort,
+                            thinkingEnabled,
+                          ) === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onMouseEnter={() => setActiveOptionIndex(index)}
+                            onClick={() =>
+                              applySlashOption(activeSlashCommand, option.value)
+                            }
+                            className={cn(
+                              "flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left transition-colors",
+                              isActive
+                                ? "bg-emerald-500/10 text-foreground"
+                                : "hover:bg-accent/50",
+                            )}
+                          >
+                            <span className="flex min-w-0 flex-col">
+                              <span className="text-sm font-medium">
+                                {option.label}
+                              </span>
+                              <span className="truncate text-[11px] text-muted-foreground">
+                                {option.description}
+                              </span>
+                            </span>
+                            {isCurrent ? (
+                              <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                current
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {queuedMessages.length > 0 ? (
+                <div className="mb-2 rounded-lg border border-emerald-200/70 bg-emerald-50/70 p-2 dark:border-emerald-500/20 dark:bg-emerald-500/10">
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                    <span className="flex items-center gap-1.5">
+                      <CircleDot className="h-3 w-3" />
+                      Queued
+                    </span>
+                    <span>{queuedMessages.length}</span>
+                  </div>
+                  <div className="mt-1.5 space-y-1">
+                    {queuedMessages.slice(0, 2).map((message) => (
+                      <div
+                        key={message.id}
+                        className="flex items-center gap-2 rounded-md border border-white/80 bg-white px-2 py-1.5 text-xs text-slate-700 shadow-sm dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-200"
+                      >
+                        <span className="min-w-0 flex-1 truncate">
+                          {getQueuedMessagePreview(message)}
+                        </span>
+                        {message.attachments.length > 0 ? (
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {message.attachments.length} image
+                            {message.attachments.length === 1 ? "" : "s"}
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          title="Remove queued message"
+                          className="rounded-full p-1 text-muted-foreground transition hover:bg-slate-100 hover:text-foreground dark:hover:bg-zinc-800"
+                          onClick={() => handleRemoveQueuedMessage(message.id)}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    {queuedMessages.length > 2 ? (
+                      <p className="px-1 text-[11px] text-emerald-700/80 dark:text-emerald-300/80">
+                        +{queuedMessages.length - 2} more
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {pendingImageAttachments.length > 0 ? (
+                <div className="mb-2 flex max-h-24 flex-wrap gap-2 overflow-y-auto rounded-lg border border-sky-200/70 bg-sky-50/70 p-2 dark:border-sky-500/20 dark:bg-sky-500/10">
+                  {pendingImageAttachments.map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      className="group flex max-w-56 items-center gap-2 rounded-md border border-white/80 bg-white px-2 py-1.5 shadow-sm dark:border-white/10 dark:bg-zinc-900"
+                    >
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-zinc-800">
+                        <img
+                          src={attachment.dataUri}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1 text-xs font-medium text-foreground">
+                          <ImageIcon className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-300" />
+                          <span className="truncate">{attachment.name}</span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          {formatAttachmentSize(attachment.size)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        title="Remove image"
+                        className="ml-auto rounded-full p-1 text-muted-foreground transition hover:bg-slate-100 hover:text-foreground dark:hover:bg-zinc-800"
+                        onClick={() =>
+                          handleRemoveImageAttachment(attachment.id)
+                        }
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <Textarea
+                placeholder="Type a message...  (/ for commands)"
+                rows={2}
+                ref={chatInputRef}
+                value={inputMessage}
+                onChange={handleMessageChange}
+                onKeyDown={handleMessageKeyDown}
+                onPaste={handleMessagePaste}
+                onSelect={handleInputSelect}
+                className="max-h-60 min-h-[3.25rem] w-full resize-none rounded-lg border-slate-200/80 bg-white text-sm shadow-sm focus-visible:ring-slate-400/30 dark:border-white/10 dark:bg-zinc-900"
+              />
+            </div>
+            <Button
+              disabled={isSendDisabled}
+              onClick={handleSendMessage}
+              size="icon"
+              title={isStreaming ? "Queue message" : "Send message"}
+              className="h-9 w-9 shrink-0 rounded-full bg-emerald-600 text-white shadow-md shadow-emerald-500/20 transition-all duration-200 hover:bg-emerald-700 hover:shadow-lg hover:shadow-emerald-500/30 disabled:bg-slate-300 disabled:shadow-none dark:disabled:bg-zinc-700"
+            >
+              <ArrowUp className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+        </div>
+      ) : null}
+
+      {showAssistantChrome && isInspectorOpen ? (
+        <aside
+          className="absolute inset-y-3 right-3 z-40 flex w-[min(var(--inspector-width),calc(100%-1.5rem))] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-xl shadow-slate-900/10 dark:border-white/10 dark:bg-zinc-950 dark:shadow-black/30 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:w-[var(--inspector-width)]"
+          style={inspectorStyle}
+        >
+          <button
+            type="button"
+            aria-label="Resize inspector"
+            title="Drag to resize inspector"
+            onPointerDown={handleInspectorResizeStart}
+            onDoubleClick={() => setInspectorWidth(INSPECTOR_DEFAULT_WIDTH)}
+            className="absolute inset-y-0 left-0 z-30 flex w-5 cursor-col-resize touch-none select-none items-center justify-center border-r border-slate-200/50 bg-white/70 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 active:bg-slate-100 dark:border-white/10 dark:bg-zinc-950/70 dark:text-zinc-600 dark:hover:bg-zinc-900 dark:hover:text-zinc-300"
+          >
+            <span className="h-14 w-1 rounded-full bg-current" />
+          </button>
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as InspectorTab)}
+            className="flex h-full min-h-0 flex-col pl-5"
+          >
+          <header className="border-b border-slate-200/80 bg-gradient-to-b from-slate-50 to-white dark:border-white/10 dark:from-zinc-900 dark:to-zinc-950">
+            <div className="flex items-center justify-between gap-3 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <span
+                  className={cn(
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
+                    composerStyles.icon,
+                  )}
+                >
+                  <Activity className="h-3.5 w-3.5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-foreground">
+                    Run Inspector
+                  </p>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <ConversationHistoryPanel />
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1356,209 +3363,188 @@ export const ChatInterface = () => {
                 >
                   <SquarePen className="h-4 w-4" />
                 </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsInspectorOpen(false)}
+                  title="Collapse inspector"
+                >
+                  <PanelRightClose className="h-4 w-4" />
+                </Button>
               </div>
             </div>
-            <div className="flex items-center justify-center">
-              <TabsList>
-                <TabsTrigger value="build">Build</TabsTrigger>
-                <TabsTrigger value="issues" className="gap-2">
-                  Issues
-                  {unseenIssuesCount > 0 ? (
-                    <Badge
-                      variant="destructive"
-                      className="rounded-full px-1.5 py-0 text-[10px]"
-                    >
-                      {unseenIssuesCount}
-                    </Badge>
-                  ) : null}
-                </TabsTrigger>
-                <TabsTrigger value="engines">Engines</TabsTrigger>
-                <TabsTrigger value="history">History</TabsTrigger>
-                <TabsTrigger value="settings">Agent</TabsTrigger>
-              </TabsList>
-            </div>
+            <TabsList className="grid h-9 w-full grid-cols-5 rounded-none border-t border-slate-200/80 bg-transparent p-1 dark:border-white/10">
+              <TabsTrigger
+                value="activity"
+                className="gap-1 px-1 text-xs data-[state=active]:bg-sky-50 data-[state=active]:text-sky-700 dark:data-[state=active]:bg-sky-950/30 dark:data-[state=active]:text-sky-300"
+              >
+                <Activity className="h-3.5 w-3.5" />
+                Activity
+              </TabsTrigger>
+              <TabsTrigger
+                value="issues"
+                className="gap-1 px-1 text-xs data-[state=active]:bg-rose-50 data-[state=active]:text-rose-700 dark:data-[state=active]:bg-rose-950/30 dark:data-[state=active]:text-rose-300"
+              >
+                <TriangleAlert className="h-3.5 w-3.5" />
+                <span>Issues</span>
+                {unseenIssuesCount > 0 ? (
+                  <Badge
+                    variant="destructive"
+                    className="rounded-full px-1.5 py-0 text-[10px]"
+                  >
+                    {unseenIssuesCount}
+                  </Badge>
+                ) : null}
+              </TabsTrigger>
+              <TabsTrigger
+                value="engines"
+                className="gap-1 px-1 text-xs data-[state=active]:bg-violet-50 data-[state=active]:text-violet-700 dark:data-[state=active]:bg-violet-950/30 dark:data-[state=active]:text-violet-300"
+              >
+                <Terminal className="h-3.5 w-3.5" />
+                Engines
+              </TabsTrigger>
+              <TabsTrigger
+                value="history"
+                className="gap-1 px-1 text-xs data-[state=active]:bg-indigo-50 data-[state=active]:text-indigo-700 dark:data-[state=active]:bg-indigo-950/30 dark:data-[state=active]:text-indigo-300"
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                History
+              </TabsTrigger>
+              <TabsTrigger
+                value="settings"
+                className="gap-1 px-1 text-xs data-[state=active]:bg-amber-50 data-[state=active]:text-amber-700 dark:data-[state=active]:bg-amber-950/30 dark:data-[state=active]:text-amber-300"
+              >
+                <Settings className="h-3.5 w-3.5" />
+                Agent
+              </TabsTrigger>
+            </TabsList>
           </header>
 
           <TabsContent
-            value="build"
-            className="mt-0 flex flex-1 min-h-0 flex-col rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-white/80 dark:bg-zinc-900/60 backdrop-blur-xl shadow-lg shadow-slate-400/5"
+            value="activity"
+            className="mt-0 flex min-h-0 flex-1 flex-col bg-white dark:bg-zinc-950"
           >
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200/70 px-3 py-2 dark:border-white/10">
+              <div className="flex min-w-0 items-start gap-2 text-xs text-muted-foreground">
+                <span
+                  className={cn(
+                    "mt-1 h-2 w-2 shrink-0 rounded-full",
+                    isStreaming ? "bg-emerald-500" : "bg-slate-300",
+                  )}
+                />
+                <span className="min-w-0">
+                  <span className="block truncate">
+                    {[liveActivityText, liveActivityDetail]
+                      .filter(Boolean)
+                      .join(" - ")}
+                  </span>
+                  {isStreaming && activeGoal ? (
+                    <span className="mt-0.5 block truncate text-[11px] text-slate-500 dark:text-zinc-400">
+                      {summarizeText(activeGoal, 150)}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+              <Badge
+                variant="outline"
+                className={cn(
+                  "h-6 px-2 text-[10px]",
+                  isStreaming &&
+                    "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/20 dark:text-emerald-300",
+                )}
+              >
+                {isStreaming ? "Live" : "Idle"}
+              </Badge>
+            </div>
             <div
               ref={messagesContainerRef}
-              className="flex-1 min-h-0 space-y-4 overflow-y-auto px-4 py-5"
+              className="min-h-0 flex-1 overflow-y-auto bg-slate-50/60 p-2 dark:bg-zinc-950"
             >
-              {messages.length === 0 && transcriptEvents.length === 0 ? (
-                <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-zinc-800">
-                    <Sparkles className="h-8 w-8 text-emerald-500" />
+              {visibleTurnTimeline.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-muted-foreground dark:border-white/10 dark:bg-zinc-900">
+                    <Activity className="h-5 w-5" />
                   </div>
                   <div className="space-y-1">
-                    <h3 className="text-lg font-semibold tracking-tight">
-                      Describe what you want to build
+                    <h3 className="text-sm font-semibold tracking-tight">
+                      No activity yet
                     </h3>
-                    <p className="text-sm text-muted-foreground">
-                      Share a workflow, paste requirements, or ask for changes
-                      in plain language.
+                    <p className="text-xs text-muted-foreground">
+                      Activity for the current run will appear here.
                     </p>
-                    <div className="pt-2 text-xs text-muted-foreground">
-                      Examples: "Create an intake app for internal requests" or
-                      "Turn this spreadsheet into a dashboard."
-                    </div>
                   </div>
                 </div>
               ) : (
                 <>
-                  {timeline.map((item) =>
-                    item.source === "message" ? (
-                      <MessageBubble key={item.key} {...item.message} />
-                    ) : (
-                      <TranscriptEventBubble
-                        key={item.key}
-                        event={item.event}
-                      />
-                    ),
-                  )}
+                  <div className="space-y-2">
+                    {visibleTurnTimeline.map((turn) => {
+                      const isActiveTurn = activeTurn?.id === turn.id;
+                      const isExpanded =
+                        activitySectionOverrides[turn.id] ?? true;
+
+                      return (
+                        <TurnTimelineCard
+                          key={turn.id}
+                          turn={turn}
+                          isActive={isActiveTurn}
+                          isStreaming={isStreaming && isActiveTurn}
+                          nowMs={nowMs}
+                          currentWork={currentWork}
+                          isExpanded={isExpanded}
+                          onToggle={() =>
+                            toggleActivitySection(turn.id, isExpanded)
+                          }
+                        />
+                      );
+                    })}
+                  </div>
                   {isStreaming ? (
-                    <div className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
-                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-                      <span>{activeHarnessLabel} is working...</span>
-                    </div>
+                    queuedMessages.length > 0 ? (
+                      <div className="mt-2 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/20 dark:text-emerald-300">
+                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+                        <span>{activeHarnessLabel} is working...</span>
+                        <span className="ml-auto rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200">
+                          {queuedMessages.length} queued
+                        </span>
+                      </div>
+                    ) : null
                   ) : (
-                    <LatestCommitChip
-                      onOpenHistory={() => setActiveTab("history")}
-                    />
+                    <div className="mt-2 rounded-lg border border-slate-200/70 bg-white px-3 py-2.5 dark:border-white/10 dark:bg-zinc-950">
+                      <LatestCommitChip
+                        onOpenHistory={() => setActiveTab("history")}
+                      />
+                    </div>
                   )}
                 </>
               )}
             </div>
 
-            <footer className="border-t border-slate-200/50 dark:border-white/10 bg-gradient-to-r from-white/60 to-slate-50/40 px-4 py-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <div className="relative flex-1">
-                  {slashMenu && activeSlashCommand ? (
-                    <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-md overflow-hidden rounded-xl border border-slate-200/70 bg-white/95 shadow-xl shadow-slate-400/20 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/95">
-                      <div className="flex max-h-72">
-                        <div className="w-32 shrink-0 space-y-0.5 overflow-y-auto border-r border-slate-200/60 bg-slate-50/70 p-1.5 dark:border-white/10 dark:bg-zinc-800/40">
-                          {slashMenu.commands.map((command, index) => {
-                            const isActive = index === slashCommandIndex;
-                            return (
-                              <button
-                                key={command.name}
-                                type="button"
-                                onClick={() => selectSlashCommand(index)}
-                                className={cn(
-                                  "flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left transition-colors",
-                                  isActive
-                                    ? "bg-white shadow-sm dark:bg-zinc-700/70"
-                                    : "hover:bg-white/70 dark:hover:bg-zinc-700/40",
-                                )}
-                              >
-                                <span className="text-sm font-medium">
-                                  {command.label}
-                                </span>
-                                <span className="font-mono text-[10px] text-muted-foreground">
-                                  {command.name}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                        <div className="flex-1 space-y-0.5 overflow-y-auto p-1.5">
-                          <p className="px-2 pb-1 pt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                            {activeSlashCommand.description}
-                          </p>
-                          {activeSlashOptions.map((option, index) => {
-                            const isActive = index === slashOptionIndex;
-                            const isCurrent =
-                              currentSlashValue(
-                                activeSlashCommand,
-                                effort,
-                                thinkingEnabled,
-                              ) === option.value;
-                            return (
-                              <button
-                                key={option.value}
-                                type="button"
-                                onMouseEnter={() => setActiveOptionIndex(index)}
-                                onClick={() =>
-                                  applySlashOption(activeSlashCommand, option.value)
-                                }
-                                className={cn(
-                                  "flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-left transition-colors",
-                                  isActive
-                                    ? "bg-emerald-500/10 text-foreground"
-                                    : "hover:bg-accent/50",
-                                )}
-                              >
-                                <span className="flex min-w-0 flex-col">
-                                  <span className="text-sm font-medium">
-                                    {option.label}
-                                  </span>
-                                  <span className="truncate text-[11px] text-muted-foreground">
-                                    {option.description}
-                                  </span>
-                                </span>
-                                {isCurrent ? (
-                                  <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                                    current
-                                  </span>
-                                ) : null}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 border-t border-slate-200/60 bg-slate-50/50 px-3 py-1.5 text-[10px] text-muted-foreground dark:border-white/10 dark:bg-zinc-800/30">
-                        <span>↑↓ options</span>
-                        {slashMenu.commands.length > 1 ? (
-                          <span>←→ switch</span>
-                        ) : null}
-                        <span>↵ apply</span>
-                        <span>esc dismiss</span>
-                      </div>
-                    </div>
-                  ) : null}
-                  <Textarea
-                    placeholder="Type a message…  (/ for commands)"
-                    rows={2}
-                    ref={chatInputRef}
-                    value={inputMessage}
-                    onChange={handleMessageChange}
-                    onKeyDown={handleMessageKeyDown}
-                    onSelect={handleInputSelect}
-                    className="min-h-[3.25rem] max-h-60 w-full resize-none border-slate-200/60 bg-white/90 dark:bg-zinc-800/70 focus-visible:ring-slate-400/30"
-                  />
-                </div>
-                <Button
-                  disabled={isSendDisabled}
-                  onClick={handleSendMessage}
-                  size="icon"
-                  className="h-9 w-9 shrink-0 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20 transition-all duration-200 hover:shadow-lg hover:shadow-emerald-500/30 disabled:bg-slate-300 disabled:shadow-none dark:disabled:bg-zinc-700"
-                >
-                  <ArrowUp className="h-4 w-4" />
-                </Button>
-              </div>
-            </footer>
           </TabsContent>
 
-          <TabsContent value="issues" className="mt-0 flex flex-1 min-h-0">
+          <TabsContent
+            value="issues"
+            className="mt-0 flex min-h-0 flex-1 bg-white dark:bg-zinc-950"
+          >
             <IssuesPanel onAskToFix={handleAskToFixIssues} />
           </TabsContent>
 
           <TabsContent
             value="engines"
-            className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 p-4 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
+            className="mt-0 min-h-0 flex-1 overflow-y-auto bg-white p-4 dark:bg-zinc-950"
           >
             <EnginesPanel />
           </TabsContent>
 
-          <TabsContent value="history" className="mt-0 flex flex-1 min-h-0">
+          <TabsContent
+            value="history"
+            className="mt-0 flex min-h-0 flex-1 bg-white dark:bg-zinc-950"
+          >
             <HistoryPanel />
           </TabsContent>
 
           <TabsContent
             value="settings"
-            className="mt-0 flex-1 min-h-0 overflow-y-auto rounded-b-xl border border-t-0 border-slate-200/50 dark:border-white/10 bg-gradient-to-b from-white/90 via-slate-50/40 to-sky-50/20 dark:from-zinc-900/80 dark:via-zinc-800/60 dark:to-zinc-900/60 p-4 shadow-lg shadow-slate-400/5 dark:shadow-black/20 backdrop-blur-xl"
+            className="mt-0 min-h-0 flex-1 overflow-y-auto bg-white p-4 dark:bg-zinc-950"
           >
             <div className="flex flex-col gap-5">
               <div className="space-y-2">
@@ -2346,7 +4332,19 @@ export const ChatInterface = () => {
             </div>
           </TabsContent>
         </Tabs>
-      </div>
+        </aside>
+      ) : showAssistantChrome ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="absolute right-4 top-4 z-20 h-8 gap-1.5 border-slate-200/80 bg-white/90 px-2 text-xs shadow-sm backdrop-blur dark:border-white/10 dark:bg-zinc-950/90"
+          onClick={() => setIsInspectorOpen(true)}
+        >
+          <PanelRightOpen className="h-3.5 w-3.5" />
+          Activity
+        </Button>
+      ) : null}
 
       <ConfirmationDialog
         open={pendingHarnessType !== null}
