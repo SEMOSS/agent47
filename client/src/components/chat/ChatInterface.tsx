@@ -9,8 +9,11 @@ import {
   CircleDot,
   Copy,
   Brain,
+  FileText,
   FileSearch,
+  Folder,
   Image as ImageIcon,
+  Link2,
   MessageSquareText,
   PanelRightClose,
   PanelRightOpen,
@@ -559,6 +562,17 @@ const getLineRangeReference = (
   return { path, startLine, endLine };
 };
 
+const extractPathReferenceFromText = (
+  value?: string,
+): TranscriptReference | null => {
+  if (!value) return null;
+  const match = value.match(
+    /(?:^|\s)([A-Za-z0-9_.@/-]+\/[A-Za-z0-9_.@/-]+\.(?:tsx|ts|jsx|js|css|scss|json|md|html|py|java|xml|yml|yaml|toml|sql|sh))(?=\b|[\s,;:)-])/,
+  );
+  if (!match?.[1]) return null;
+  return { path: match[1] };
+};
+
 const getEventReferences = (event: TranscriptEvent): TranscriptReference[] => {
   const refs = [...(event.references ?? [])];
   if (event.kind === "tool-result" && event.filePath) {
@@ -572,6 +586,18 @@ const getEventReferences = (event: TranscriptEvent): TranscriptReference[] => {
     const path = getRecordValue(args, ["file_path", "filePath", "path"]);
     if (typeof path === "string" && path.trim()) {
       refs.push(getLineRangeReference(path.trim(), args));
+    }
+  }
+  if (event.kind === "tool-invocation" || event.kind === "tool-result") {
+    const candidates = [
+      event.title,
+      event.description,
+      event.displayName,
+      event.kind === "tool-result" ? event.content : undefined,
+    ];
+    for (const candidate of candidates) {
+      const ref = extractPathReferenceFromText(candidate);
+      if (ref) refs.push(ref);
     }
   }
 
@@ -713,6 +739,9 @@ const getActivityEventDetail = (event: TranscriptEvent) => {
       .join(", ");
     const statsSummary = summarizeToolStats(event.stats);
     const inputSummary = summarizeArgs(event.toolParameterValues);
+    const safeInputSummary = looksLikeRawJsonSummary(inputSummary)
+      ? ""
+      : summarizeText(inputSummary, 140);
     const rawOutputSummary = summarizeToolOutput(
       event.content ?? event.detailedContent,
       140,
@@ -723,23 +752,23 @@ const getActivityEventDetail = (event: TranscriptEvent) => {
         : "";
 
     if (label === "Read file") {
-      return referenceSummary || outputSummary || summarizeText(inputSummary, 140);
+      return referenceSummary || safeInputSummary;
     }
     if (label === "Search files") {
-      return outputSummary || referenceSummary || summarizeText(inputSummary, 140);
+      return outputSummary || referenceSummary || safeInputSummary;
     }
     if (label === "Edit file") {
       return (
         statsSummary ||
         referenceSummary ||
         outputSummary ||
-        summarizeText(inputSummary, 140)
+        safeInputSummary
       );
     }
     if (label === "Build/publish") {
-      return outputSummary || statsSummary || summarizeText(inputSummary, 140);
+      return outputSummary || statsSummary || safeInputSummary;
     }
-    return outputSummary || referenceSummary || summarizeText(inputSummary, 140);
+    return outputSummary || referenceSummary || safeInputSummary;
   }
   if (event.kind === "max-turns-reached") {
     return `${event.turnCount} of ${event.maxTurns} turns used`;
@@ -973,6 +1002,12 @@ const ACTIVITY_GROUP_STYLES: Record<
   },
 };
 
+const getReferenceIcon = (ref?: TranscriptReference) => {
+  if (ref?.kind === "directory") return Folder;
+  if (ref?.kind === "url") return Link2;
+  return FileText;
+};
+
 const FileReferenceChips = ({ refs }: { refs: TranscriptReference[] }) => {
   if (refs.length === 0) return null;
 
@@ -980,13 +1015,14 @@ const FileReferenceChips = ({ refs }: { refs: TranscriptReference[] }) => {
     <div className="mt-1 flex flex-wrap gap-1">
       {refs.slice(0, 3).map((ref) => {
         const lineRange = formatReferenceLineRange(ref);
+        const Icon = getReferenceIcon(ref);
         return (
           <span
             key={`${ref.path}-${lineRange}`}
             className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300"
             title={[ref.path, lineRange].filter(Boolean).join(" - ")}
           >
-            <FileSearch className="h-2.5 w-2.5 shrink-0" />
+            <Icon className="h-2.5 w-2.5 shrink-0" />
             <span className="truncate">{ref.label ?? shortenPath(ref.path)}</span>
             {lineRange ? (
               <span className="shrink-0 text-muted-foreground">
